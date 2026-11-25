@@ -1,0 +1,8 @@
+# 开发测试脚本：只在本机用，不发布
+js/dev.js
+
+# 系统与编辑器的杂项
+Thumbs.db
+desktop.ini
+.DS_Store
+.vscode/

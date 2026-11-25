@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<title>云岚侠影录 · 原创国风武侠RPG</title>
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+<canvas id="gl"></canvas>
+<canvas id="cv"></canvas>
+<div id="ui"></div>
+<script src="js/lib/three.min.js"></script>
+<script src="js/data.js"></script>
+<script src="js/core.js"></script>
+<script src="portraits/index.js"></script>
+<script src="js/art.js"></script>
+<script src="js/audio.js"></script>
+<script src="js/g3.js"></script>
+<script src="js/g3char.js"></script>
+<script src="models/index.js"></script>
+<script src="js/g3model.js"></script>
+<script src="js/world.js"></script>
+<script src="js/g3scene.js"></script>
+<script src="js/cine.js"></script>
+<script src="js/story.js"></script>
+<script src="js/ui.js"></script>
+<script src="js/minimap.js"></script>
+<script src="js/ai.js"></script>
+<script src="js/jianghu.js"></script>
+<script src="js/talks.js"></script>
+<script src="js/banter.js"></script>
+<script src="js/battle.js"></script>
+<!-- 开发测试脚本只在网址带 ?test= / ?sim= / ?shot= 时才载入；它不随游戏发布（见 .gitignore），线上没有这个文件 -->
+<script>if (/[?&](test|sim|shot)=/.test(location.search)) document.write('<script src="js/dev.js"><\/script>');</script>
+<script src="js/main.js"></script>
+</body>
+</html>

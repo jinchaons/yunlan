@@ -18,10 +18,10 @@ const G3 = (() => {
      前三档是固定的一套，面板上只显示、不能改；要改就选“自定义”，各分项（GFX_OPT）都能单独定，存在 gcust 里，下次选自定义还是这一套。
      分项分两类：live = 1 改了立刻生效；live = 0 是建场景、载模型的时候用的，要刷新页面才生效——这些一律读开局时的那一份（g3.gfxBoot）。
      自动、高清、低配都不动四位主角的模型、贴图和材质（自动降档到 85%、70% 分辨率时主角会略糊）；低配只简化景物、其他人物与后期。 */
-  const GFX_DEF = { res: 1, msaa: 4, bloom: 1, ss: 1, cap: 0, hiTex: 1, anim: 1, shadow: 2, scene: 1, veg: 1, npcTex: 0, npcShadow: 1 };
+  const GFX_DEF = { res: 1, msaa: 4, bloom: 1, ss: 1, cap: 0, hiTex: 1, anim: 1, shadow: 2, bake: 0, scene: 1, veg: 1, npcTex: 0, npcShadow: 1 };
   // 低配不封帧率：封在 30 帧时，镜头跟着主角平移，画面一格一格地跳，招牌上的字、人物这些对比强的细节看着在抖、在闪（30 帧平移的通病）。
   // 30 帧留作可选（自定义里）：显卡实在跟不上、或者想省电时再开
-  const GFX_PRE = { auto: {}, high: {}, low: { msaa: 0, bloom: 0, ss: 0, cap: 0, anim: 2, shadow: 1, scene: 0, veg: 0.5, npcTex: 1024, npcShadow: 0 }, custom: null };
+  const GFX_PRE = { auto: {}, high: {}, low: { msaa: 0, bloom: 0, ss: 0, cap: 0, anim: 2, shadow: 1, bake: 1, scene: 0, veg: 0.5, npcTex: 1024, npcShadow: 0 }, custom: null };
   const GFX_OPT = [   // [键, 名称, [[值, 说明]…], 是否立刻生效]
     ['res', '渲染分辨率', [[1, '100%'], [0.85, '85%（主角也会略糊）'], [0.7, '70%（主角也会略糊）']], 1],
     ['msaa', '多重采样抗锯齿', [[4, '4 倍'], [2, '2 倍'], [0, '关（只用后期抗锯齿）']], 1],
@@ -31,6 +31,7 @@ const G3 = (() => {
     ['hiTex', '主角近景的高清贴图', [[1, '开（拉近时换上）'], [0, '关']], 1],
     ['anim', '其他人物的动作', [[1, '每帧计算'], [2, '隔一帧计算']], 1],
     ['shadow', '阴影', [[2, '精细（2048，柔边）'], [1, '普通（1024，硬边）']], 0],
+    ['bake', '景物的影子', [[0, '每帧重算'], [1, '进图时算好一次（省）']], 0],
     ['scene', '景物材质', [[1, '精细'], [0, '简化（不算环境反射与细部凹凸）']], 0],
     ['veg', '草丛', [[1, '正常'], [0.5, '减半']], 0],
     ['npcTex', '其他人物的贴图', [[0, '原样'], [1024, '缩小，不用法线与粗糙度贴图']], 0],
@@ -51,7 +52,9 @@ const G3 = (() => {
   let gmode = 'auto', gcust = null;
   try { const ls = k => localStorage.getItem(k), js = k => { try { return JSON.parse(ls(k)); } catch (e) { return null; } }; const r = gfxLoad(ls('yunlan_quality'), js('yunlan_gfx'), js('yunlan_gfx_custom')); gmode = r.mode; gcust = r.cust; } catch (e) { }
   { const m = /[?&]gfx=(\w+)/.exec(QS); if (m && m[1] in GFX_PRE) gmode = m[1]; }   // ?gfx=low：只这一次按某一档开（不存）
-  const gfx = g3.gfx = gfxVals(gmode, gcust), gfxBoot = g3.gfxBoot = Object.assign({}, gfx);
+  const gfx = g3.gfx = gfxVals(gmode, gcust);
+  { const m = /[?&]gfxo=([\w:.,]+)/.exec(QS); if (m) m[1].split(',').forEach(p => { const kv = p.split(':'); if (kv[0] in GFX_DEF) gfx[kv[0]] = +kv[1]; }); }   // ?gfxo=bake:0：开发对照用，在这一档上临时改几项（不存）
+  const gfxBoot = g3.gfxBoot = Object.assign({}, gfx);
   g3.k_gfxLoad = gfxLoad;   // 测试用
   const LITE = !gfxBoot.scene;   // 景物用简化材质
 

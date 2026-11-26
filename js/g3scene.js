@@ -113,8 +113,77 @@
     _sp.copy(_sx).multiplyScalar(a).addScaledVector(_sy, b).addScaledVector(d, k);
     u.sun.target.position.copy(_sp); u.sun.position.copy(_sp).addScaledVector(d, 50); u.sun.target.updateMatrixWorld();
   }
+  /* ---------- 景物的影子进图时算好一次（画质设置里的“景物的影子”，低配默认开；只用于大地图） ----------
+     原先每帧都要把镜头附近的景物从太阳那边再画一遍（阴影贴图），这一遍的三角面和主画面差不多多。可景物不会动、太阳也不动，影子就不会变：
+     进图时按整张地图把景物的影子画进一张大阴影贴图（bakeStatic），之后每帧只画人物（world.dyn 里的一切，屋里还有墙）。
+     每帧用的那张阴影贴图照旧跟着镜头走（aimSun），先用一块铺满的方片（customDepthMaterial 是 bakeFS）把大图里对应的那一块深度拷进来，
+     再把人物画上去——着色器里还是只查一张阴影贴图，取样次数、影子的样子都和原来一样。
+     怎么分：three.js 画阴影时从场景的根往下挨个找要投影的东西（R.shadowMap.render），这里把它包一层——
+     每帧画的时候只从 world.dyn 往下找（拷贝用的方片也放在 world.dyn 里），景物一个也不碰；画大图的时候从整个场景往下找，人物先藏起来。
+     （不能靠图层分：这一版 three.js 画阴影时按主镜头的图层挑东西，不看阴影镜头的图层。）
+     画大图用第 31 层的灯和镜头：主画面一个东西也不画，只有这盏灯的阴影要画。
+     大图的阴影像素和默认视野下每帧那张一样大、格子对齐（都按 t0 的整数倍摆），拷过来是一格对一格，不会走一步闪一下。
+     代价：会动的景物（风里的灯笼之类）的影子定在进图那一刻；进图时多画一张大图。 */
+  const BAKE = !!GB0.bake && R.capabilities.isWebGL2, L_BAKE = 31;
+  const SMR = R.shadowMap.render, cam0 = new THREE.Camera();   // cam0：第 0 层的镜头，画大图时拿它决定“哪些东西算数”
+  let smRoot = null, smCam = null;
+  if (BAKE) R.shadowMap.render = function (lights, scene, camera) { return SMR.call(this, lights, smRoot || scene, smCam || camera); };
+  const bakeVS = 'varying vec2 vUv;\nvoid main() { vUv = uv; gl_Position = vec4(position.xy, 0.0, 1.0); }';
+  // 每帧那张阴影贴图上的一格 → 大图上的同一处（uN），大图里存的深度 → 换算成这张图的深度（uZ）。大图上没有东西的地方写成“最远”
+  const bakeFS = '#include <packing>\nuniform sampler2D tS;\nuniform mat4 uN;\nuniform vec4 uZ;\nvarying vec2 vUv;\nvoid main() {\n' +
+    ' vec4 s = uN * vec4(vUv * 2.0 - 1.0, 0.0, 1.0); vec2 su = s.xy * 0.5 + 0.5; float d = 1.0;\n' +
+    ' if (su.x >= 0.0 && su.x <= 1.0 && su.y >= 0.0 && su.y <= 1.0) { float ds = unpackRGBAToDepth(texture2D(tS, su));\n' +
+    '  if (ds < 0.99999) d = clamp(dot(uZ, vec4(s.xy, ds * 2.0 - 1.0, 1.0)) * 0.5 + 0.5, 0.0, 1.0); }\n' +
+    ' gl_FragDepth = d; gl_FragColor = d >= 1.0 ? vec4(1.0) : packDepthToRGBA(d);\n}';
+  const bakeCam = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1); bakeCam.layers.set(L_BAKE);
+  const bakeGeo = new THREE.PlaneGeometry(2, 2); bakeGeo._keep = true;
+  // 进图时画那张大图。b：这张图的场景（sceneSteps 的结果），m：地图
+  function bakeStatic(b, m) {
+    const sc = b.sc, u = sc.userData, d = u.dir, t0 = 30 / u.sun.shadow.mapSize.x, mx = Math.min(4096, R.capabilities.maxTextureSize), E = 5, RY = 14;
+    _sx.set(d.z, 0, -d.x).normalize(); _sy.crossVectors(d, _sx);
+    // 大图要盖住的地方：整张图再往外 E 格（镜头最多看到图外两三格），高到 RY（房顶、树冠、近处的山坡，影子落在它们上面也得查得到）——
+    // 在太阳看过来的平面上取外框。挡光的东西可以更高（图外的山）：深度方向按高到 40 留
+    let a0 = 1e9, a1 = -1e9, b0 = 1e9, b1 = -1e9, k0 = 1e9, k1 = -1e9;
+    for (const x of [-E, m.w + E]) for (const z of [-E, m.h + E]) for (const y of [-1, RY, 40]) {
+      _sp.set(x, y, z); const k = _sp.dot(d); k0 = Math.min(k0, k); k1 = Math.max(k1, k);
+      if (y > RY) continue;
+      const a = _sp.dot(_sx), bb = _sp.dot(_sy); a0 = Math.min(a0, a); a1 = Math.max(a1, a); b0 = Math.min(b0, bb); b1 = Math.max(b1, bb);
+    }
+    const ts = t0 * Math.ceil(Math.max(a1 - a0, b1 - b0) / (t0 * mx));   // 大图的阴影像素：一般就是 t0；图太大、超出 4096 时取它的整数倍
+    a0 = Math.floor(a0 / ts) * ts; a1 = Math.ceil(a1 / ts) * ts; b0 = Math.floor(b0 / ts) * ts; b1 = Math.ceil(b1 / ts) * ts;
+    const bk = new THREE.DirectionalLight(0xffffff, 0), sh = bk.shadow, c = sh.camera;
+    bk.castShadow = true; bk.layers.set(L_BAKE); sh.mapSize.set(Math.round((a1 - a0) / ts), Math.round((b1 - b0) / ts)); sh.autoUpdate = false; sh.needsUpdate = true;
+    c.left = -(a1 - a0) / 2; c.right = (a1 - a0) / 2; c.bottom = -(b1 - b0) / 2; c.top = (b1 - b0) / 2; c.near = 1; c.far = k1 - k0 + 3; c.updateProjectionMatrix();
+    bk.position.copy(_sx).multiplyScalar((a0 + a1) / 2).addScaledVector(_sy, (b0 + b1) / 2).addScaledVector(d, k1 + 2); bk.target.position.copy(bk.position).sub(d);
+    sc.add(bk); sc.add(bk.target); b.dyn.visible = false; smCam = cam0;
+    const rt = R.getRenderTarget(); R.setRenderTarget(warmRT); R.render(sc, bakeCam); R.setRenderTarget(rt);
+    smCam = null; b.dyn.visible = true; sc.remove(bk); sc.remove(bk.target);
+    const mat = new THREE.ShaderMaterial({ uniforms: { tS: { value: sh.map.texture }, uN: { value: new THREE.Matrix4() }, uZ: { value: new THREE.Vector4() } }, vertexShader: bakeVS, fragmentShader: bakeFS });
+    // 拷贝用的方片：主画面里它什么也不写（不写颜色、不写深度），只在画阴影时用 customDepthMaterial 铺满整张阴影贴图。
+    // 两面都画：画阴影时 three.js 会把单面材质翻成背面
+    const quad = new THREE.Mesh(bakeGeo, new THREE.MeshBasicMaterial({ side: THREE.DoubleSide, colorWrite: false, depthWrite: false, depthTest: false }));
+    quad.customDepthMaterial = mat; quad.castShadow = true; quad.frustumCulled = false; quad.position.y = -50; b.dyn.add(quad);
+    u.bake = { bk, cam: c, mat, quad, w: sh.mapSize.x, h: sh.mapSize.y, ts, t0, base: u.sun.shadow.mapSize.x };
+  }
+  // 每帧：算出拷贝要用的两组换算；这一帧画阴影时只从 world.dyn 往下找（present 画完再放开，见 world.render）
+  const _m1 = new THREE.Matrix4(), _m2 = new THREE.Matrix4();
+  function bakeFrame(sc, dyn, ref) {
+    const u = sc.userData, B = u.bake, sun = u.sun, c = sun.shadow.camera;
+    B.quad.visible = !ref; smRoot = ref ? null : dyn;   // ref：开发对照用，这一帧照原来的办法把景物也画进阴影贴图
+    sun.updateMatrixWorld(); sun.shadow.updateMatrices(sun);   // 画的时候 three.js 会再算一遍，结果相同
+    _m1.multiplyMatrices(c.projectionMatrix, c.matrixWorldInverse).invert();
+    _m2.multiplyMatrices(B.cam.projectionMatrix, B.cam.matrixWorldInverse);
+    const N = B.mat.uniforms.uN.value.multiplyMatrices(_m2, _m1), e = _m1.copy(N).invert().elements;
+    B.mat.uniforms.uZ.value.set(e[2], e[6], e[10], e[14]);
+  }
   // 阴影贴图覆盖的范围（半边长）：范围越小，同一张贴图落在人物身上的像素越多，影子越清晰
-  function shadowSpan(sc, r) { const u = sc.userData; if (u.sr === r) return; u.sr = r; const c = u.sun.shadow.camera; c.left = -r; c.right = r; c.top = r; c.bottom = -r; c.updateProjectionMatrix(); }
+  // 景物影子算好一次时（u.bake）：每帧那张阴影贴图的一格固定和大图一样大，范围要大就把贴图加大（按 256 一档），不放大格子——
+  // 这样任何视野下都是一格对一格拷过来，走动时影子边不会抖。
+  // 剧情运镜（cine）照原来的办法：贴图回到原尺寸，景物每帧重画（见 bakeFrame）——近景里原来就用更细的阴影，大图没那么细
+  function shadowSpan(sc, r, cine) {
+    const u = sc.userData;
+    if (u.bake) { const sh = u.sun.shadow, n = cine ? u.bake.base : Math.ceil(2 * r / u.bake.t0 / 256) * 256; if (!cine) r = n * u.bake.t0 / 2; if (sh.mapSize.x !== n) { sh.mapSize.set(n, n); if (sh.map) { sh.map.dispose(); sh.map = null; } } }
+    if (u.sr === r) return; u.sr = r; const c = u.sun.shadow.camera; c.left = -r; c.right = r; c.top = r; c.bottom = -r; c.updateProjectionMatrix(); }
   /* 夜色（地图定义里写了 dayNight 的才有，眼下只有落霞镇）：天光换成很暗的月色——太阳光改成偏蓝的弱光、环境光换一张夜空烘出来的、
      雾和远处压成深蓝；灯火本身是自发光的，不受这些影响，于是窗里的灯、檐下和路边的灯笼就在暗处亮了出来。
      再把灯笼的光晕和地上的光斑加强、泛光加大，夜里的街就是一盏盏灯照出来的。
@@ -144,6 +213,7 @@
     }
   }
   function disposeScene(sc) {
+    const B = sc.userData && sc.userData.bake; if (B) { B.bk.shadow.dispose(); B.mat.dispose(); }   // 景物影子的那张大图
     sc.traverse(o => {
       if (o.isMesh && o.geometry && !o.geometry._keep) o.geometry.dispose();
       const m = o.material;
@@ -1416,6 +1486,8 @@
   const ZMAX = 2;   // 滚轮缩放的范围：0.36（贴近人物）～ 1（默认）～ 2（拉远，看到的范围宽一倍）
   try { const z = +localStorage.getItem('yunlan_zoom'); if (z >= 0.36 && z <= ZMAX) world.zoom = world.zoomT = z; } catch (e) { }
   world.zmax = ZMAX;
+  // 测试用：这张图的景物影子大图（没开就是 null）
+  world.bakeInfo = () => { const B = world.sc && world.sc.userData.bake; return B ? { w: B.w, h: B.h, ts: B.ts, t0: B.t0, sun: world.sc.userData.sun, quad: B.quad, map: B.bk.shadow.map } : null; };
   // 界面上“视野”按钮的五档：默认、默认与最远的正中、最远、默认与最近的正中、最近。不在档位上（用滚轮调过）时先回到默认
   const ZSTEPS = [[1, '默认'], [(1 + ZMAX) / 2, '较远'], [ZMAX, '最远'], [(1 + 0.36) / 2, '较近'], [0.36, '最近']];
   world.stepZoom = () => {
@@ -1683,6 +1755,9 @@
   }
   world.render = (W, dt) => {
     const m = W.map; if (world.m !== m) world.build(m);
+    // 这张图第一次画：先把景物的影子算好（场景留着的话，再进来不用重算）。
+    // 屋里不做：墙在 world.dyn 里本来就每帧画，屋子又小（一间不到十万个三角面），省不了什么，还白占一张大图
+    if (BAKE && !m.d.indoor && !world.sc.userData.bake) { const tp = PT(); bakeStatic(world.cur, m); PF('bake shadows', tp); }
     fno++;
     if (world.heroId !== avatarId()) { const old = world.hero, av = avatarId(), nh = world.hero = K.mkChar(CHARS[av].look, false, false); addBlob(nh); world.dyn.add(nh.g); nh.yaw = old.yaw; world.dyn.remove(old.g); K.kill(old); world.heroId = av; }
     const sc = world.sc, p = W.p, t = W.t, px = p.px / T, pz = p.py / T - 0.3, kt = 1 - Math.exp(-dt * 12), hero = world.hero, lit = sc.userData.lit;
@@ -1806,7 +1881,7 @@
       const c = CN.cam, sh = CN.shake || 0;
       cam.fov = c.fov; cam.aspect = asp; cam.updateProjectionMatrix();
       cam.position.set(c.px + (Math.random() - 0.5) * sh, c.py + (Math.random() - 0.5) * sh, c.pz); cam.lookAt(c.tx, c.ty, c.tz); cam.updateMatrixWorld();
-      shadowSpan(sc, 10); sc.fog.near = 30; sc.fog.far = 85; aimSun(sc, c.tx, c.tz); U.uP.value.set(c.tx, 0, c.tz); U.uPS.value.z = 0;
+      shadowSpan(sc, 10, true); sc.fog.near = 30; sc.fog.far = 85; aimSun(sc, c.tx, c.tz); U.uP.value.set(c.tx, 0, c.tz); U.uPS.value.z = 0;
     } else {
       shadowSpan(sc, Math.round(15 * zo * 4) / 4);   // 阴影只算镜头看得到的那一片再多出几格（原先是 19，城里每帧有近一半的三角面花在画面外的阴影上） sc.fog.near = 30 * zo; sc.fog.far = 85 * zo;
       cam.fov = 30; cam.aspect = asp; cam.updateProjectionMatrix();
@@ -1819,11 +1894,13 @@
     fxAnim(world.fxo, t);
     if (world.cur && world.cur.clouds) cloudsAnim(world.cur.clouds, Math.min(dt || 0, 0.1), px, pz);
     for (const x of world.exits) { const ok = !x.e.need || S.flags[x.e.need]; x.me.visible = !CN; x.me.material.color.copy(LC(ok ? '#fff0a0' : '#ff6060', 1.4)); x.me.material.opacity = 0.36 + 0.22 * Math.sin(t * 3); }
+    if (sc.userData.bake) bakeFrame(sc, world.dyn, !!world.bakeRef || !!CN);   // 剧情运镜时景物照旧每帧画进阴影（见 shadowSpan）
     const gr = CN && CN.grade;   // 运镜时的调色：夜景等
     let unc = null;
     if (first) { unc = []; sc.traverse(o => { if (o.frustumCulled && (o.isMesh || o.isPoints || o.isLine || o.isSprite)) { o.frustumCulled = false; unc.push(o); } }); }   // 第一帧：不裁剪，全图画一遍
     const ng = sc.userData.night ? NIGHT : null, nE = ng ? ng.exp : 1, nB = ng ? ng.bloom : 1, nS = ng ? ng.sat : 1;   // 夜里：泛光加大，颜色略偏冷
-    K.present(sc, cam, CN ? { exp: lit.exp * 1.22 * (gr ? gr.exp : 1) * nE, bloom: lit.bloom * (gr ? gr.bloom : 1.15) * nB, sat: lit.sat * (gr ? gr.sat : 0.97) * nS, con: 1.03, vig: 0.3, ss: 1.25, tint: gr ? gr.tint : ng ? ng.tint : null } : { exp: lit.exp * nE, bloom: lit.bloom * nB, sat: lit.sat * nS, con: 1.05, tint: ng ? ng.tint : null });
+    try { K.present(sc, cam, CN ? { exp: lit.exp * 1.22 * (gr ? gr.exp : 1) * nE, bloom: lit.bloom * (gr ? gr.bloom : 1.15) * nB, sat: lit.sat * (gr ? gr.sat : 0.97) * nS, con: 1.03, vig: 0.3, ss: 1.25, tint: gr ? gr.tint : ng ? ng.tint : null } : { exp: lit.exp * nE, bloom: lit.bloom * nB, sat: lit.sat * nS, con: 1.05, tint: ng ? ng.tint : null }); }
+    finally { smRoot = null; }   // 只管这一帧的大地图；战斗、标题等别的画面照常
     if (unc) for (const o of unc) o.frustumCulled = true;
     if (!CN) pump(p.moving ? 2 : 6);   // 后台预建下一张图：主角走动时每帧只占 2 毫秒（不抢画面），站着不动时 6 毫秒
   };

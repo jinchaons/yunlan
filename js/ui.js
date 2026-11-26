@@ -160,9 +160,9 @@ const UI = (() => {
   /* ---------- 画质设置：四个档位，外加各分项单独调（见 g3.js 的 GFX_OPT） ---------- */
   let gfxOpen = false;
   const GFX_DESC = {
-    auto: '按帧率自动调整：跟不上时先减抗锯齿，再降分辨率（降到后面几档时主角也会略糊）。',
+    auto: '按帧率自动调整：跟不上时先减抗锯齿，再降分辨率（降到后面几档时主角也会略糊）。下面的抗锯齿和超采样是上限，降档后会自动减。',
     high: '各项都照最好的来，分辨率锁定不降。适合独立显卡。',
-    fast: '分辨率降到七成，不做多重采样。主角也会跟着略糊。',
+    fast: '分辨率降到七成，不做多重采样，主角近景也不换高清贴图。主角会跟着略糊。',
     low: '给集成显卡用：景物、草丛、其他人物和后期都简化。分辨率不降，四位主角的模型、贴图和材质照旧。'
   };
   function gfxPanel(on) {
@@ -175,7 +175,7 @@ const UI = (() => {
     let h = '<div class="panel aip"><div class="tabs"><span class="ttl">画质设置</span><button class="x" data-act="close">✕</button></div><div class="aibody">' +
       '<div class="airow"><span>档位</span><div class="gfxmodes">' + ['auto', 'high', 'fast', 'low'].map(k => '<button class="btn sm' + (k === q ? '' : ' ghost') + '" data-mode="' + k + '">' + M[k] + '</button>').join('') + '</div></div>' +
       '<p class="aitip gfxdesc">' + GFX_DESC[q] + (G3.gfxCustom() ? '　<b>下面有几项单独改过。</b>' : '') + '</p>';
-    h += G3.gfxOpts.map(o => { const cur = o[2].find(x => x[0] === g[o[0]]) || o[2][0]; return '<div class="airow gfxrow"><span>' + o[1] + '</span><button class="btn sm ghost" data-gfx="' + o[0] + '">' + cur[1] + '</button><small>' + (o[3] ? '立即生效' : '刷新后生效') + '</small></div>'; }).join('');
+    h += G3.gfxOpts.map(o => { const cur = o[2].find(x => x[0] === g[o[0]]) || o[2][0]; return '<div class="airow gfxrow"><span>' + o[1] + '</span><button class="btn sm ghost" data-gfx="' + o[0] + '">' + (q === 'auto' && cur[0] && o[0] === 'msaa' ? '最多 ' + cur[1] : cur[1]) + '</button><small>' + (o[3] ? '立即生效' : '刷新后生效') + '</small></div>'; }).join('');
     h += '<p class="aimsg' + (stale.length ? ' bad' : ' ok') + '">' + (stale.length ? '还有 ' + stale.length + ' 项要刷新页面才生效：' + stale.map(name).join('、') + '。' : '当前：' + G3.qualityText()) + '</p>' +
       '<div class="aibtns">' + (stale.length ? '<button class="btn" data-act="reload">' + (S && G.scene === 'world' ? '保存进度并刷新' : '刷新页面') + '</button>' : '') + '<button class="btn ghost" data-act="close">关闭</button></div>' +
       '<p class="ainote">每一项点一下就换到下一个选项。按 F3 打开性能读数，可以看到帧率和每帧画了多少东西。<br>设置只存在这台电脑的浏览器里，不进存档。</p></div></div>';

@@ -21,7 +21,8 @@ const G3 = (() => {
   const GFX_DEF = { msaa: 4, bloom: 1, ss: 1, cap: 0, anim: 1, shadow: 2, scene: 1, veg: 1, npcTex: 0, npcShadow: 1 };
   // 低配不封帧率：封在 30 帧时，镜头跟着主角平移，画面一格一格地跳，招牌上的字、人物这些对比强的细节看着在抖、在闪（30 帧平移的通病）。
   // 30 帧留作可选：显卡实在跟不上、或者想省电时再开
-  const GFX_PRE = { auto: {}, high: {}, fast: {}, low: { msaa: 0, bloom: 0, ss: 0, cap: 0, anim: 2, shadow: 1, scene: 0, veg: 0.5, npcTex: 1024, npcShadow: 0 } };
+  // 流畅：分辨率锁在七成（见 curLv），抗锯齿和超采样的默认值写在这里，面板上看到的就是实际用的，单独改也生效
+  const GFX_PRE = { auto: {}, high: {}, fast: { msaa: 0, ss: 0 }, low: { msaa: 0, bloom: 0, ss: 0, cap: 0, anim: 2, shadow: 1, scene: 0, veg: 0.5, npcTex: 1024, npcShadow: 0 } };
   const GFX_OPT = [   // [键, 名称, [[值, 说明]…], 是否立刻生效]
     ['msaa', '多重采样抗锯齿', [[4, '4 倍'], [2, '2 倍'], [0, '关（只用后期抗锯齿）']], 1],
     ['bloom', '泛光', [[1, '开'], [0, '关']], 1],
@@ -385,9 +386,9 @@ const G3 = (() => {
   g3.rs = TEST ? 0.4 : 1;   // 自动测试时降低内部分辨率，加快无头软件渲染
   // 画质档位 [内部分辨率比例, 多重采样数]。帧率不够时先减多重采样（边缘仍有 FXAA 兜底），最后才降分辨率，而且最低只到 0.7，
   // 免得人物的脸糊掉。画质设为“高清”时锁定在第一档，“流畅”锁定在最后一档
-  // 高清、低配锁在全分辨率（多重采样按设置）；流畅锁在最后一档；自动按帧率在各档之间升降。多重采样都不超过设置里的上限
+  // 高清、低配锁在全分辨率（多重采样按设置）；流畅锁在七成分辨率（多重采样按设置，默认关）；自动按帧率在各档之间升降。多重采样都不超过设置里的上限
   const LV = [[1, 4], [1, 2], [1, 0], [0.85, 0], [0.7, 0]];
-  const curLv = () => { if (TEST) return [0.4, 4]; const L = gmode === 'auto' ? LV[lvl] : gmode === 'fast' ? LV[LV.length - 1] : LV[0]; return [L[0], Math.min(L[1], gfx.msaa)]; };
+  const curLv = () => { if (TEST) return [0.4, 4]; const L = gmode === 'auto' ? LV[lvl] : gmode === 'fast' ? [LV[LV.length - 1][0], 4] : LV[0]; return [L[0], Math.min(L[1], gfx.msaa)]; };
   g3.quality = () => gmode;
   g3.perfInfo = () => ({ mode: GFX_MODE[gmode] + (Object.keys(gover).length ? '（自定义）' : ''), lvl, scale: curLv()[0], msaa: curLv()[1], calls: R.info.render.calls, tris: R.info.render.triangles });   // 性能读数用（见 main.js）
   const gfxSave = () => { try { localStorage.setItem('yunlan_quality', gmode); localStorage.setItem('yunlan_gfx', JSON.stringify(gover)); } catch (e) { } };
@@ -426,7 +427,7 @@ const G3 = (() => {
       }
       const L = curLv(); g3.rs = L[0];
       // 超采样（o.ss）：以高于屏幕的分辨率渲染再缩小，细小的东西（五官、发丝）更清楚。只在画质没被降档、像素总量不过大时启用
-      let ss = o.ss && gfx.ss && !TEST && gmode !== 'fast' && (gmode !== 'auto' || lvl === 0) ? o.ss : 1;
+      let ss = o.ss && gfx.ss && !TEST && (gmode !== 'auto' || lvl === 0) ? o.ss : 1;
       if (ss > 1) ss = Math.max(1, Math.min(ss, Math.sqrt(3840 * 2160 / (g3.bw * g3.bh))));
       const w = Math.max(2, Math.round(g3.bw * g3.rs * ss)), h = Math.max(2, Math.round(g3.bh * g3.rs * ss));
       if (!mainSet || mainSet.w !== w || mainSet.h !== h || mainSet.sm !== L[1]) { if (mainSet) freeSet(mainSet); mainSet = mkSet(w, h, L[1]); }

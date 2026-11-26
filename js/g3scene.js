@@ -35,7 +35,9 @@
         ' if (kk < 1.0) { float nz = fract(52.9829189 * fract(dot(floor(gl_FragCoord.xy), vec2(0.06711056, 0.00583715)))); if (nz > kk * kk * 0.75 + 0.12) discard; }\n}');
   }
   const keep = m => { m._keep = true; return m; };
-  const matSee = keep(K.stdMat({ see: true })), matPlain = keep(K.stdMat({}));
+  // 景物共用的材质都带 scene 标记：画质设置里“景物材质”选了简化时，换成简化材质（见 g3.js 的 stdMat）
+  const GB0 = G3.gfxBoot, LITE = !GB0.scene;
+  const matSee = keep(K.stdMat({ see: true, scene: true })), matPlain = keep(K.stdMat({ scene: true }));
   // 植被贴图集（透明底，近白色，由顶点色染色）：0 阔叶枝 1 花枝 2 竹叶 3 草丛
   const leafTex = K.canvasTex(1024, 1024, c => {
     c.scale(2, 2);   // 以 512 的坐标绘制，实际分辨率翻倍，叶片轮廓放大后不发虚
@@ -53,25 +55,32 @@
   });
   leafTex.anisotropy = 4; leafTex._keep = true;
   const TILE = [[0.02, 0.52, 0.48, 0.98], [0.52, 0.52, 0.98, 0.98], [0.02, 0.02, 0.48, 0.48], [0.52, 0.02, 0.98, 0.49]];
-  const matLeafSee = keep(K.stdMat({ see: true, two: true, keepN: true, wind: 1, map: leafTex })), matLeaf = keep(K.stdMat({ two: true, keepN: true, wind: 1, map: leafTex }));
-  const matGrass = keep(K.stdMat({ two: true, keepN: true, wind: 2, map: leafTex, alphaTest: 0.35 }));
+  const matLeafSee = keep(K.stdMat({ see: true, two: true, keepN: true, wind: 1, map: leafTex, scene: true })), matLeaf = keep(K.stdMat({ two: true, keepN: true, wind: 1, map: leafTex, scene: true }));
+  const matGrass = keep(K.stdMat({ two: true, keepN: true, wind: 2, map: leafTex, alphaTest: 0.35, scene: true }));
+  // 简化材质下的平面（地底、战场的路面）：漫反射 + 天光
+  function liteFlat(p) { const m = new THREE.MeshLambertMaterial(p); m.onBeforeCompile = K.hemiPatch; m.customProgramCacheKey = () => 'g3flat'; return m; }
+  const flatMat = p => { if (!LITE) return new THREE.MeshStandardMaterial(p); const q = Object.assign({}, p); delete q.roughness; delete q.metalness; return liteFlat(q); };
+  // 草丛减半：照常掷骰子（后面的景物摆放不变），只是每两丛里有一丛画到一个不用的缓冲里
+  const vegKeep = (() => { const r = mulberry32(4242); return () => GB0.veg >= 1 || r() < GB0.veg; })();
   const mkF = () => { const g = new GB().m('leaf'); g.T = []; return g; }, mkGr = () => { const g = new GB().m(0.75, 0, 0.1, 0.05); g.T = []; return g; };
   const matGlowSee = keep(new THREE.MeshBasicMaterial({ vertexColors: true })); matGlowSee.onBeforeCompile = seeBasic;
   const blobMat = keep(new THREE.MeshBasicMaterial({ map: K.glowTex, color: 0x000000, transparent: true, opacity: 0.42, depthWrite: false }));
   const blobGeo = new THREE.PlaneGeometry(1, 1); blobGeo.rotateX(-PI / 2); blobGeo._keep = true;
   function addBlob(ch, s) { const b = new THREE.Mesh(blobGeo, blobMat); b.position.y = 0.02; b.scale.setScalar(s || (ch.kind === 'human' ? 0.95 : 1.3)); b.renderOrder = 1; ch.g.add(b); ch.blob = b; }
   // 地面材质：在底图上叠加噪声细节与微凹凸
+  // （简化材质下：漫反射 + 天光，颜色上的两层噪声照旧，不做噪声凹凸）
   function groundMat(tex, tw, th, tint, gd) {
-    const m = new THREE.MeshStandardMaterial({ map: tex, color: LC('#ffffff', tint || 1), roughness: 0.94, metalness: 0 }), tile = { value: new THREE.Vector2(tw, th) }, dc = gd ? LC(gd[1]) : null, des = { value: new THREE.Vector4(dc ? dc.r : 0, dc ? dc.g : 0, dc ? dc.b : 0, gd ? gd[0] : 0) };
+    const m = LITE ? new THREE.MeshLambertMaterial({ map: tex, color: LC('#ffffff', tint || 1) }) : new THREE.MeshStandardMaterial({ map: tex, color: LC('#ffffff', tint || 1), roughness: 0.94, metalness: 0 }), tile = { value: new THREE.Vector2(tw, th) }, dc = gd ? LC(gd[1]) : null, des = { value: new THREE.Vector4(dc ? dc.r : 0, dc ? dc.g : 0, dc ? dc.b : 0, gd ? gd[0] : 0) };
     m.onBeforeCompile = sh => {
       sh.uniforms.tNoise = U.tNoise; sh.uniforms.uTile = tile; sh.uniforms.uDes = des;
       sh.fragmentShader = sh.fragmentShader.replace('#include <common>', '#include <common>\nuniform sampler2D tNoise;\nuniform vec2 uTile;\nuniform vec4 uDes;')
-        .replace('#include <map_fragment>', '#include <map_fragment>\nvec2 gUv = vUv * uTile;\nvec3 gA = texture2D(tNoise, gUv * 0.23).rgb; vec3 gB = texture2D(tNoise, gUv * 1.7).rgb;\nfloat gH = gA.g * 0.45 + gB.g * 0.35 + gB.r * 0.2;\ndiffuseColor.rgb = mix(diffuseColor.rgb, uDes.rgb * (dot(diffuseColor.rgb, vec3(0.3, 0.55, 0.15)) * 2.4 + 0.015), uDes.a);\ndiffuseColor.rgb *= 0.8 + 0.38 * (gA.b * 0.45 + gB.g * 0.55);')
-        .replace('#include <normal_fragment_maps>', '#include <normal_fragment_maps>\n' +
+        .replace('#include <map_fragment>', '#include <map_fragment>\nvec2 gUv = vUv * uTile;\nvec3 gA = texture2D(tNoise, gUv * 0.23).rgb; vec3 gB = texture2D(tNoise, gUv * 1.7).rgb;\nfloat gH = gA.g * 0.45 + gB.g * 0.35 + gB.r * 0.2;\ndiffuseColor.rgb = mix(diffuseColor.rgb, uDes.rgb * (dot(diffuseColor.rgb, vec3(0.3, 0.55, 0.15)) * 2.4 + 0.015), uDes.a);\ndiffuseColor.rgb *= 0.8 + 0.38 * (gA.b * 0.45 + gB.g * 0.55);');
+      if (LITE) { K.hemiPatch(sh); return; }
+      sh.fragmentShader = sh.fragmentShader.replace('#include <normal_fragment_maps>', '#include <normal_fragment_maps>\n' +
           '{ vec3 bx = dFdx(-vViewPosition), by = dFdy(-vViewPosition); float hx = dFdx(gH), hy = dFdy(gH);\n vec3 r1 = cross(by, normal), r2 = cross(normal, bx); float det = dot(bx, r1);\n' +
           ' normal = normalize(abs(det) * normal - 0.035 * sign(det) * (hx * r1 + hy * r2)); }');
     };
-    m.customProgramCacheKey = () => 'g3ground';
+    m.customProgramCacheKey = () => LITE ? 'g3groundL' : 'g3ground';
     return m;
   }
 
@@ -79,14 +88,19 @@
     const L = LIT[theme], sc = new THREE.Scene(), s = L.sky;
     const env = K.envFor(theme, LC(s[0], s[1]), LC(s[2], s[3]), LC(s[4], s[5]), LC(L.sun[0], L.sun[1] * 0.4), L.dir);
     if (env) sc.environment = env; else sc.add(new THREE.HemisphereLight(LC(Art.mix(s[0], s[2], 0.5), (s[1] + s[3]) / 2), LC(s[4], s[5]), 1));
+    // 简化材质的天光：与上面那盏半球光同一对颜色。没有环境贴图时那盏灯已经照着了，这里就给黑色，免得加两遍
+    const hemi = env ? hemiOf(s) : [new THREE.Color(0, 0, 0), new THREE.Color(0, 0, 0)];
     const sun = new THREE.DirectionalLight(LC(L.sun[0]), L.sun[1]);
-    sun.castShadow = true; sun.shadow.mapSize.set(2048, 2048);
+    sun.castShadow = true; sun.shadow.mapSize.setScalar(GB0.shadow >= 2 ? 2048 : 1024);   // 画质设置里的“阴影”：精细 2048、普通 1024
     const c = sun.shadow.camera; c.left = -shadowR; c.right = shadowR; c.top = shadowR; c.bottom = -shadowR; c.near = 1; c.far = 110;
     sun.shadow.bias = -0.0004; sun.shadow.normalBias = 0.035;
     sc.add(sun); sc.add(sun.target);
-    sc.userData = { sun, dir: new THREE.Vector3(L.dir[0], L.dir[1], L.dir[2]).normalize(), lit: L };
+    sc.userData = { sun, dir: new THREE.Vector3(L.dir[0], L.dir[1], L.dir[2]).normalize(), lit: L, hemi };
     return sc;
   }
+  // 简化材质的天光：按环境贴图（g3.js 的 envFor）里天空的画法估出来——朝上的面看到的天，余弦加权下天顶约占八成、地平线两成；
+  // 朝下的面看到的地面约占八成半，其余是地平线
+  const hemiOf = s => { const top = LC(s[0], s[1]), hor = LC(s[2], s[3]), gnd = LC(s[4], s[5]); return [hor.clone().lerp(top, 0.78), hor.clone().lerp(gnd, 0.85)]; };
   function aimSun(sc, x, z) {
     const u = sc.userData; x = Math.round(x * 2) / 2; z = Math.round(z * 2) / 2;
     u.sun.target.position.set(x, 0, z); u.sun.position.set(x + u.dir.x * 50, u.dir.y * 50, z + u.dir.z * 50); u.sun.target.updateMatrixWorld();
@@ -105,14 +119,14 @@
     const sc = b.sc, u = sc.userData; on = !!on;
     if (!!u.night === on) return;
     const sky = b.sky && b.sky.material.uniforms;
-    if (!u.day) u.day = { env: sc.environment, sunC: u.sun.color.clone(), sunI: u.sun.intensity, fog: sc.fog.color.clone(), dome: sky ? { cT: sky.cT.value.clone(), cM: sky.cM.value.clone(), cH: sky.cH.value.clone(), cC: sky.cC.value.clone(), cS: sky.cS.value.clone() } : null };
+    if (!u.day) u.day = { env: sc.environment, hemi: u.hemi, sunC: u.sun.color.clone(), sunI: u.sun.intensity, fog: sc.fog.color.clone(), dome: sky ? { cT: sky.cT.value.clone(), cM: sky.cM.value.clone(), cH: sky.cH.value.clone(), cC: sky.cC.value.clone(), cS: sky.cS.value.clone() } : null };
     u.night = on;
     const D = u.day, s = NIGHT.sky;
     if (on) {
       const env = K.envFor('night', LC(s[0], s[1]), LC(s[2], s[3]), LC(s[4], s[5]), LC(NIGHT.sun[0], NIGHT.sun[1] * 0.4), u.lit.dir);
-      if (env && D.env) sc.environment = env;
+      if (env && D.env) { sc.environment = env; u.hemi = hemiOf(s); }
       u.sun.color.copy(LC(NIGHT.sun[0])); u.sun.intensity = NIGHT.sun[1]; sc.fog.color.copy(LC(NIGHT.fog));
-    } else { if (D.env) sc.environment = D.env; u.sun.color.copy(D.sunC); u.sun.intensity = D.sunI; sc.fog.color.copy(D.fog); }
+    } else { if (D.env) sc.environment = D.env; u.hemi = D.hemi; u.sun.color.copy(D.sunC); u.sun.intensity = D.sunI; sc.fog.color.copy(D.fog); }
     if (sc.background && sc.background.isColor) sc.background.copy(sc.fog.color);
     if (sky) for (const k in D.dome) sky[k].value.copy(on ? LC(NIGHT.dome[k][0], NIGHT.dome[k][1]) : D.dome[k]);
     const fo = b.fxo;
@@ -1478,7 +1492,7 @@
     const tex = new THREE.CanvasTexture(m.ground); tex.encoding = THREE.sRGBEncoding; tex.anisotropy = R.capabilities.getMaxAnisotropy();
     const gm = new THREE.Mesh(new THREE.PlaneGeometry(m.w, m.h), groundMat(tex, m.w, m.h, 0.6, lit.gd));
     gm.rotation.x = -PI / 2; gm.position.set(m.w / 2, 0, m.h / 2); gm.receiveShadow = true; sc.add(gm); out.tex = tex;
-    const um = new THREE.Mesh(new THREE.PlaneGeometry(500, 500), new THREE.MeshStandardMaterial({ color: LC(d.indoor ? '#050508' : Art.shade(th.base[0], -0.18)), roughness: 1 }));
+    const um = new THREE.Mesh(new THREE.PlaneGeometry(500, 500), flatMat({ color: LC(d.indoor ? '#050508' : Art.shade(th.base[0], -0.18)), roughness: 1 }));
     um.rotation.x = -PI / 2; um.position.set(m.w / 2, -0.03, m.h / 2); um.receiveShadow = true; sc.add(um);
     // 静态景物，按 8×8 分块合并：L 实体，F 树叶，Gr 草，Gl 发光体
     const CH = 8, chunks = {};
@@ -1534,11 +1548,12 @@
     }
     // 草丛、花、碎石
     const gc0 = lin(Art.shade(th.base[1], -0.1)), gc1 = lin(Art.mix(th.blot[0], th.base[2], 0.5)), bt = baseOf(d.theme), lush = bt === 'mountain' || bt === 'bamboo' || bt === 'town', gh = lush ? 0.34 : 0.22;
+    const junk = mkGr();   // 草丛减半时，被略去的那些画到这里（用完即弃）
     for (let y = 0; y < m.h; y++) for (let x = 0; x < m.w; x++) {
       if (x === 0 && y % 4 === 0) yield;
       const i = m.I(x, y); if (m.g[i] !== GR.BASE) continue;
       const c = chunk(x, y), nt = lush ? 5 : 1;
-      for (let t = 0; t < nt; t++) if (rnd() < (lush ? 0.75 : 0.3)) grassTuft(c.Gr, x + rnd(), y + rnd(), rnd, gc0, gc1, 2, gh);
+      for (let t = 0; t < nt; t++) if (rnd() < (lush ? 0.75 : 0.3)) grassTuft(vegKeep() ? c.Gr : junk, x + rnd(), y + rnd(), rnd, gc0, gc1, 2, gh);
       if (d.bloom && !m.blk[i]) {   // 花海（d.bloom = { p 每格开花的机会, n 每格几丛, cols 花色 }）：满地野花，不挡路
         const bl = d.bloom;
         if (rnd() < bl.p) for (let j = 0; j < bl.n; j++) {
@@ -1638,8 +1653,21 @@
     const ch = K.mkChar(n.look, false, false); ch.seed = n.seed; ch.yaw = (n.def.face || 1) * 0.5; addBlob(ch);
     return { g: ch.g, ch, kind: 'human', look: n.look };
   }
+  // 画质设置里的“其他人物的投影”：只用脚下的圆影时，NPC、路上的对手和行人不投实时阴影（主角照旧投）
+  const noCast = g => { if (!GB0.npcShadow) g.traverse(o => { if (o.isMesh) o.castShadow = false; }); };
+  // “其他人物的动作”隔帧算：把跳过那几帧的时长攒着，轮到它的那一帧一次算完；各人错开，不挤在同一帧。主角、剧情里的人物不受影响
+  let fno = 0;
+  function animNpc(e, o) {
+    const n = G3.gfx.anim;
+    if (!(n > 1)) { K.animate(e.ch, o); return; }
+    e.adt = (e.adt || 0) + (o.dt || 0);
+    if (e.slot == null) e.slot = Math.floor(Math.random() * n);
+    if ((fno + e.slot) % n) return;
+    o.dt = e.adt; e.adt = 0; K.animate(e.ch, o);
+  }
   world.render = (W, dt) => {
     const m = W.map; if (world.m !== m) world.build(m);
+    fno++;
     if (world.heroId !== avatarId()) { const old = world.hero, av = avatarId(), nh = world.hero = K.mkChar(CHARS[av].look, false, false); addBlob(nh); world.dyn.add(nh.g); nh.yaw = old.yaw; world.dyn.remove(old.g); K.kill(old); world.heroId = av; }
     const sc = world.sc, p = W.p, t = W.t, px = p.px / T, pz = p.py / T - 0.3, kt = 1 - Math.exp(-dt * 12), hero = world.hero, lit = sc.userData.lit;
     const CN = world.cine, adt = CN ? dt * CN.rate : dt;   // 剧情运镜：人物和镜头由导演（cine.js）摆布
@@ -1676,21 +1704,21 @@
     for (const n of W.npcs) {
       let e = world.npc.get(n.def);
       const nx = n.px / T, nz = n.py / T - 0.3;
-      if (!e) { if (!n.sprite || n.w > 1) { if (quota <= 0 || !inView(nx, nz, 3 + (n.w || 1))) continue; quota--; } e = mkNpc(n); world.npc.set(n.def, e); world.dyn.add(e.g); }
+      if (!e) { if (!n.sprite || n.w > 1) { if (quota <= 0 || !inView(nx, nz, 3 + (n.w || 1))) continue; quota--; } e = mkNpc(n); if (e.kind === 'human') noCast(e.g); world.npc.set(n.def, e); world.dyn.add(e.g); }
       seen.add(n.def);
       e.g.position.set(nx, 0, nz);
       if (!CN) { e.g.visible = inView(nx, nz, n.w || 1); if (!e.g.visible) continue; }   // 镜头看不到的人物不画、也不算动作（一个带模型的人物有一万多个面）
       if (e.kind === 'chest') { const open = !!S.flags['c_' + n.def.chest]; e.lid.rotation.x += ((open ? -1.25 : 0) - e.lid.rotation.x) * kt; e.gl.material.opacity = open ? 0 : 0.22 + Math.sin(t * 3) * 0.1; }
       else if (e.kind === 'spring') { e.gl.material.opacity = 0.4 + Math.sin(t * 2) * 0.1; e.sparks.forEach((s, i) => { const k = (t * 0.5 + i / 4) % 1; s.position.set(Math.sin(i * 2.4 + t) * 0.25, 0.1 + k * 0.9, Math.cos(i * 1.7 + t * 0.7) * 0.2); s.material.opacity = 1 - k; }); }
       else if (e.kind === 'obj') { if (e.gl) e.gl.material.opacity = 0.34 + Math.sin(t * 2.4) * 0.12; }
-      else if (e.kind === 'stall') K.animate(e.ch, { t, dt });
+      else if (e.kind === 'stall') animNpc(e, { t, dt });
       else {
         const frozen = !!(n.def.frozen && n.def.frozen(S)), pose = n.def.pose || 'idle', near = Math.hypot(px - nx, pz - nz) < 2.1;
         const ov = CN && n.def.who && CN.act[n.def.who] && CN.act[n.def.who].npc === n.def ? CN.act[n.def.who] : null;
         e.g.visible = !(CN && CN.noNpc && !ov);
         if (ov) { e.g.rotation.y = turn(e.ch, ov.yaw, kt * 0.5); ov.h = e.ch.h; ov.glb = !!e.ch.glb; K.animate(e.ch, { t, dt: adt, pose: ov.pose || pose, act: ov.act, loop: ov.loop, look: lookOf(ov, e.ch.yaw) }); if (e.ch.blob) e.ch.blob.visible = (ov.pose || pose) !== 'dead'; K.setHiTex(e.ch, hiZ); continue; }
         if (pose !== 'dead' && !frozen) e.g.rotation.y = turn(e.ch, near ? Math.atan2(px - nx, pz - nz) : (n.def.face || 1) * 0.5, kt * 0.6); else e.g.rotation.y = e.ch.yaw;
-        K.animate(e.ch, { t: frozen ? 1 : t, dt, pose, look: frozen || pose !== 'idle' || Math.hypot(px - nx, pz - nz) > 5 ? null : relYaw(nx, nz, e.ch.yaw, px, pz, 1.6) });
+        animNpc(e, { t: frozen ? 1 : t, dt, pose, look: frozen || pose !== 'idle' || Math.hypot(px - nx, pz - nz) > 5 ? null : relYaw(nx, nz, e.ch.yaw, px, pz, 1.6) });
         if (e.ch.blob) e.ch.blob.visible = pose !== 'dead';
         K.setHiTex(e.ch, hiZ);
         if (frozen && !e.ice) {
@@ -1705,7 +1733,7 @@
     for (const f of W.foes) {
       let e = world.foe.get(f);
       const fx = f.px / T, fz = f.py / T - 0.3;
-      if (!e) { if (quota <= 0 || !inView(fx, fz, 4)) continue; quota--; const ch = K.mkChar(f.look, false, false); ch.seed = f.seed; ch.yaw = 0; if (ch.kind !== 'spirit') addBlob(ch); e = { g: ch.g, ch }; world.foe.set(f, e); world.dyn.add(e.g); }
+      if (!e) { if (quota <= 0 || !inView(fx, fz, 4)) continue; quota--; const ch = K.mkChar(f.look, false, false); ch.seed = f.seed; ch.yaw = 0; if (ch.kind !== 'spirit') addBlob(ch); noCast(ch.g); e = { g: ch.g, ch }; world.foe.set(f, e); world.dyn.add(e.g); }
       seen.add(f);
       e.g.position.set(fx, 0, fz);
       e.g.visible = CN ? !!f.fixed : inView(fx, fz, 1.5);   // 运镜时游荡的小怪不入画；平时镜头外的不画
@@ -1714,7 +1742,7 @@
       if (fo) { e.g.rotation.y = turn(e.ch, fo.yaw, kt * 0.4); fo.h = e.ch.h; fo.glb = !!e.ch.glb; K.animate(e.ch, { t, dt: adt, pose: fo.pose || 'idle', act: fo.act, loop: fo.loop, look: lookOf(fo, e.ch.yaw) }); K.tint(e.ch, 0, fo.alpha == null ? 1 : fo.alpha); continue; }
       const ty = f.moving ? Math.atan2(f.nx - f.x, f.ny - f.y) : (f.fixed || f.alert) ? Math.atan2(px - fx, pz - fz) : e.ch.yaw;
       e.g.rotation.y = turn(e.ch, ty, kt * 0.7);
-      K.animate(e.ch, { t, dt, walk: f.moving }); K.tint(e.ch, 0, f.cool > 0 ? 0.45 : 1);
+      animNpc(e, { t, dt, walk: f.moving }); K.tint(e.ch, 0, f.cool > 0 ? 0.45 : 1);
     }
     for (const [k, e] of world.foe) if (!seen.has(k)) { killEnt(e); world.foe.delete(k); }
     // 街上的行人：走到镜头附近才创建，走出镜头只是藏起来（不拆掉，免得来回走动时反复重建）；运镜时不入画
@@ -1723,10 +1751,10 @@
       const wx = w.px / T, wz = w.py / T - 0.3, near = inView(wx, wz, 1.5);
       let e = world.walk.get(w);
       if (!near) { if (e) { e.g.visible = false; seen.add(w); } continue; }
-      if (!e) { if (quota <= 0) continue; quota--; const ch = K.mkChar(w.look, false, false); ch.seed = w.seed; ch.yaw = Math.atan2(w.dx, w.dy); addBlob(ch); e = { g: ch.g, ch }; world.walk.set(w, e); world.dyn.add(e.g); }
+      if (!e) { if (quota <= 0) continue; quota--; const ch = K.mkChar(w.look, false, false); ch.seed = w.seed; ch.yaw = Math.atan2(w.dx, w.dy); addBlob(ch); noCast(ch.g); e = { g: ch.g, ch }; world.walk.set(w, e); world.dyn.add(e.g); }
       seen.add(w); e.g.visible = true;
       e.g.position.set(wx, 0, wz); e.g.rotation.y = turn(e.ch, Math.atan2(w.dx, w.dy), kt * 0.6);
-      K.animate(e.ch, { t, dt, walk: w.moving });
+      animNpc(e, { t, dt, walk: w.moving });
     }
     for (const [k, e] of world.walk) if (!seen.has(k)) { killEnt(e); world.walk.delete(k); }
     // 剧情里另外登场的人物（同伴、敌方角色等）；云澈本人沿用大地图上的那个模型
@@ -1834,7 +1862,7 @@
     gt.wrapS = gt.wrapT = THREE.RepeatWrapping; gt.repeat.set(40, 40); gt.anisotropy = R.capabilities.getMaxAnisotropy();
     const gm = new THREE.Mesh(new THREE.PlaneGeometry(900, 900), groundMat(gt, 22.5, 22.5, 0.66, lit.gd)); gm.rotation.x = -PI / 2; gm.position.z = -200; gm.receiveShadow = true; sc.add(gm);
     const at = K.canvasTex(256, 256, c => { const g = c.createRadialGradient(128, 128, 20, 128, 128, 128); g.addColorStop(0, Art.rgba(th.path, 0.7)); g.addColorStop(0.55, Art.rgba(th.path, 0.42)); g.addColorStop(1, Art.rgba(th.path, 0)); c.fillStyle = g; c.fillRect(0, 0, 256, 256); });
-    const am = new THREE.Mesh(new THREE.PlaneGeometry(26, 12), new THREE.MeshStandardMaterial({ map: at, transparent: true, depthWrite: false, roughness: 0.95 })); am.rotation.x = -PI / 2; am.position.set(0, 0.012, 0.3); am.receiveShadow = true; am.renderOrder = 1; sc.add(am);
+    const am = new THREE.Mesh(new THREE.PlaneGeometry(26, 12), flatMat({ map: at, transparent: true, depthWrite: false, roughness: 0.95 })); am.rotation.x = -PI / 2; am.position.set(0, 0.012, 0.3); am.receiveShadow = true; am.renderOrder = 1; sc.add(am);
     // 景物
     const L = new GB(), F = mkF(), Gr = mkGr(), Gl = new GB();
     const put = (x, z, lod) => prop(th.trees[Math.floor(rnd() * th.trees.length)], L, F, Gl, x, z, 1.0 + rnd() * 0.55, rnd, fx, lod);
@@ -1846,7 +1874,8 @@
     const bt = baseOf(theme), acc = bt === 'fire' || bt === 'abyss' ? 'brazier' : bt === 'snow' ? 'crysI' : 'lantern';
     for (const s of [-1, 1]) { prop(acc, L, F, Gl, s * 7.6, -3.7, 1.1, rnd, fx); prop(acc, L, F, Gl, s * 3.4, -5.3, 1.1, rnd, fx); }
     const lush = bt === 'mountain' || bt === 'bamboo' || bt === 'town', gc0 = lin(Art.shade(th.base[1], -0.1)), gc1 = lin(Art.mix(th.blot[0], th.base[2], 0.5));
-    for (let i = 0; i < (lush ? 2600 : 500); i++) { const x = (rnd() - 0.5) * 56, z = 5.5 - rnd() * 30, e = Math.hypot(x / 9.5, (z - 0.3) / 3.6); if (e < 1 && rnd() > e * e * e) continue; grassTuft(Gr, x, z, rnd, gc0, gc1, 2, lush ? 0.36 : 0.24); }
+    const junk = mkGr();
+    for (let i = 0; i < (lush ? 2600 : 500); i++) { const x = (rnd() - 0.5) * 56, z = 5.5 - rnd() * 30, e = Math.hypot(x / 9.5, (z - 0.3) / 3.6); if (e < 1 && rnd() > e * e * e) continue; grassTuft(vegKeep() ? Gr : junk, x, z, rnd, gc0, gc1, 2, lush ? 0.36 : 0.24); }
     L.m('stone'); for (let i = 0; i < 46; i++) { const x = (rnd() - 0.5) * 50, z = 5 - rnd() * 22; if (Math.abs(x) < 8.5 && z > -3.6) continue; const s = 0.1 + rnd() * rnd() * 0.5; L.add(rockGeo[i % 3], M(x, s * 0.3, z, s * 1.2, s, s, 0, rnd() * 6, 0), Art.shade(th.stone, -0.4), Art.shade(th.stone, -0.08)); }
     sc.add(L.mesh(matPlain, true, true)); if (!F.empty()) sc.add(F.mesh(matLeaf, true, true)); sc.add(Gr.mesh(matGrass, false, true)); if (!Gl.empty()) sc.add(Gl.mesh(K.matGlow, false, false));
     // 远山

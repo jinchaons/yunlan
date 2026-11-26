@@ -147,18 +147,29 @@
   // 让浏览器在后台把图片解码完再继续；解码迟迟不回话（页面在后台标签里、无头浏览器里都会这样）就不等了，半秒后照常继续
   // （开发截图 / 测试模式下不走这一步：无头浏览器的“虚拟时间”会被一个迟迟不结束的解码卡住，整个页面停在那里）
   const decodeThen = (im, fn) => { let done = false; const once = () => { if (!done) { done = true; fn(); } }; if (im.decode && !ONLY_WANT) { im.decode().then(once, once); setTimeout(once, 500); } else once(); };
+  // 四位主角：画质设置怎么调，他们的贴图都不缩、不减
+  const PROTAG = { hero: 1, su: 1, bai: 1, shi: 1 };
   function parse(id) {
     const d = raw[id], g = d.gltf, bin = d.bin, acc = mkAcc(g, d, bin);
+    // 画质设置里“其他人物的贴图”选了缩小（npcTex = 边长上限）：非主角的颜色贴图缩到这个边长以内，法线、粗糙度贴图不载
+    const cap = !PROTAG[id] && G3.gfxBoot && G3.gfxBoot.npcTex ? G3.gfxBoot.npcTex : 0;
     const tex = {}, texOf = (ref, srgb) => {
       if (!ref) return null;
       const src = g.textures[ref.index].source, key = src + (srgb ? 's' : 'l');
       if (tex[key]) return tex[key];
       if (!d.img[src]) return null;
       const im = new Image(), t = new THREE.Texture(im);
-      t.flipY = false; t.wrapS = t.wrapT = THREE.RepeatWrapping; t.anisotropy = Math.min(8, K.R.capabilities.getMaxAnisotropy()); if (srgb) t.encoding = THREE.sRGBEncoding;
+      t.flipY = false; t.wrapS = t.wrapT = THREE.RepeatWrapping; t.anisotropy = Math.min(cap ? 2 : 8, K.R.capabilities.getMaxAnisotropy()); if (srgb) t.encoding = THREE.sRGBEncoding;
       const e = d.img[src], url = URL.createObjectURL(new Blob([bin.slice(e[0], e[0] + e[1])], { type: e[2] }));
       // 图片到了：先让浏览器在后台把它解码完，再马上送进显卡——不等这个人物第一次走进画面时才解码、上传（那样会顿一下）
-      const up = () => { t.needsUpdate = true; T.pending--; try { K.R.initTexture(t); } catch (e) { } };
+      const up = () => {
+        if (cap && Math.max(im.width, im.height) > cap) {   // 缩小：画到一张小画布上，用画布代替原图
+          const k = cap / Math.max(im.width, im.height), cv = document.createElement('canvas');
+          cv.width = Math.max(1, Math.round(im.width * k)); cv.height = Math.max(1, Math.round(im.height * k));
+          const c2 = cv.getContext('2d'); c2.imageSmoothingQuality = 'high'; c2.drawImage(im, 0, 0, cv.width, cv.height); t.image = cv;
+        }
+        t.needsUpdate = true; T.pending--; try { K.R.initTexture(t); } catch (e) { }
+      };
       T.pending++; im.onload = () => { URL.revokeObjectURL(url); decodeThen(im, up); }; im.onerror = () => { T.pending--; URL.revokeObjectURL(url); };
       im.src = url;
       return tex[key] = t;
@@ -189,8 +200,8 @@
       }
     }
     for (const m of g.materials || []) {
-      const pm = m.pbrMetallicRoughness || {}, mr = texOf(pm.metallicRoughnessTexture, false);
-      T.mats.push({ map: texOf(pm.baseColorTexture, true), normalMap: texOf(m.normalTexture, false), mr,
+      const pm = m.pbrMetallicRoughness || {}, mr = cap ? null : texOf(pm.metallicRoughnessTexture, false);
+      T.mats.push({ map: texOf(pm.baseColorTexture, true), normalMap: cap ? null : texOf(m.normalTexture, false), mr,
         color: pm.baseColorFactor || [1, 1, 1, 1], rough: pm.roughnessFactor == null ? 1 : pm.roughnessFactor, metal: pm.metallicFactor == null ? 1 : pm.metallicFactor });
     }
     // 骨架：绑定姿势取自逆绑定矩阵，不依赖节点上保存的（可能是动画某一帧的）姿势

@@ -12,10 +12,37 @@ const G3 = (() => {
     const lose = gl && gl.getExtension('WEBGL_lose_context'); if (lose) lose.loseContext();
   } catch (e) { hdr = false; }
   const POST = hdr && !/[?&]post=0/.test(QS);
+
+  /* ---------- 画质设置（右上角“画质”按钮打开的面板） ----------
+     档位 gmode：auto 自动（按帧率自动降多重采样和分辨率）/ high 高清 / fast 流畅（分辨率降到七成）/ low 低配（集成显卡用）。
+     各分项（GFX_OPT）在档位的基础上还可以单独改（gover 记着改过的几项）。分项分两类：
+       live = 1 改了立刻生效；live = 0 是建场景、载模型的时候用的，要刷新页面才生效——这些一律读开局时的那一份（g3.gfxBoot）。
+     任何一档都不动四位主角的模型、贴图和材质；低配只简化景物、其他人物与后期，分辨率保持原样（只有“流畅”会降分辨率，主角也跟着变糊）。 */
+  const GFX_DEF = { msaa: 4, bloom: 1, ss: 1, cap: 0, anim: 1, shadow: 2, scene: 1, veg: 1, npcTex: 0, npcShadow: 1 };
+  const GFX_PRE = { auto: {}, high: {}, fast: {}, low: { msaa: 0, bloom: 0, ss: 0, cap: 30, anim: 2, shadow: 1, scene: 0, veg: 0.5, npcTex: 1024, npcShadow: 0 } };
+  const GFX_OPT = [   // [键, 名称, [[值, 说明]…], 是否立刻生效]
+    ['msaa', '多重采样抗锯齿', [[4, '4 倍'], [2, '2 倍'], [0, '关（只用后期抗锯齿）']], 1],
+    ['bloom', '泛光', [[1, '开'], [0, '关']], 1],
+    ['ss', '过场与标题的超采样', [[1, '开'], [0, '关']], 1],
+    ['cap', '帧率上限', [[0, '不限'], [30, '30 帧']], 1],
+    ['anim', '其他人物的动作', [[1, '每帧计算'], [2, '隔一帧计算']], 1],
+    ['shadow', '阴影', [[2, '精细（2048，柔边）'], [1, '普通（1024，硬边）']], 0],
+    ['scene', '景物材质', [[1, '精细'], [0, '简化（不算环境反射与细部凹凸）']], 0],
+    ['veg', '草丛', [[1, '正常'], [0.5, '减半']], 0],
+    ['npcTex', '其他人物的贴图', [[0, '原样'], [1024, '缩小，不用法线与粗糙度贴图']], 0],
+    ['npcShadow', '其他人物的投影', [[1, '实时投影'], [0, '只用脚下的圆影']], 0]
+  ];
+  const GFX_MODE = { auto: '自动', high: '高清', fast: '流畅', low: '低配' };
+  let gmode = 'auto', gover = {};
+  try { const q = localStorage.getItem('yunlan_quality'); if (GFX_PRE[q]) gmode = q; const o = JSON.parse(localStorage.getItem('yunlan_gfx')); if (o && typeof o === 'object') gover = o; } catch (e) { }
+  { const m = /[?&]gfx=(\w+)/.exec(QS); if (m && GFX_PRE[m[1]]) { gmode = m[1]; gover = {}; } }   // ?gfx=low：只这一次按某一档开（不存）
+  const gfx = g3.gfx = Object.assign({}, GFX_DEF, GFX_PRE[gmode], gover), gfxBoot = g3.gfxBoot = Object.assign({}, gfx);
+  const LITE = !gfxBoot.scene;   // 景物用简化材质
+
   let R;
   try { R = new THREE.WebGLRenderer({ canvas: cvs, antialias: !POST, powerPreference: 'high-performance' }); }
   catch (e) { cvs.style.display = 'none'; return g3; }
-  R.shadowMap.enabled = true; R.shadowMap.type = THREE.PCFSoftShadowMap;
+  R.shadowMap.enabled = true; R.shadowMap.type = gfxBoot.shadow >= 2 ? THREE.PCFSoftShadowMap : THREE.PCFShadowMap;
   R.outputEncoding = POST ? THREE.LinearEncoding : THREE.sRGBEncoding;
   R.toneMapping = POST ? THREE.NoToneMapping : THREE.ACESFilmicToneMapping;
   R.info.autoReset = false;
@@ -175,7 +202,50 @@ const G3 = (() => {
 
   /* ---------- PBR 材质：顶点 pbr 属性 + 三向噪声细节（反照率/粗糙度/凹凸） ----------
      flags：leg 衣摆随腿摆动；see 主角遮挡透视；rim 布料边缘绒光 */
-  const U = { uP: { value: new V3() }, uPS: { value: new V3() }, tNoise: { value: noiseTex }, uTime: { value: 0 } };
+  // uHS / uHG：简化材质的天光与地面反光（低配下景物不算环境反射，改用这一对颜色；每帧由 present 按当前场景换上）
+  const U = { uP: { value: new V3() }, uPS: { value: new V3() }, tNoise: { value: noiseTex }, uTime: { value: 0 }, uHS: { value: new THREE.Color(0.5, 0.5, 0.5) }, uHG: { value: new THREE.Color(0.2, 0.2, 0.2) } };
+  // 简化材质里补上的天光：法线朝上取天色、朝下取地面反光（与半球光同一算法），代替环境贴图的漫反射
+  const HEMI_GLSL = '{ float hk = dot(normal, normalize((viewMatrix * vec4(0.0, 1.0, 0.0, 0.0)).xyz)) * 0.5 + 0.5; reflectedLight.indirectDiffuse += PI * mix(uHG, uHS, hk) * BRDF_Lambert(diffuseColor.rgb); }\n#include <aomap_fragment>';
+  // 简化材质的平行光：漫反射照旧，另把 GGX 高光记进 gSpec（阴影已经乘在 directLight.color 里了，背光处自然没有高光）
+  const LAMBERT_SPEC = THREE.ShaderChunk.lights_lambert_pars_fragment.replace('reflectedLight.directDiffuse += irradiance * BRDF_Lambert( material.diffuseColor );',
+    '$&\n\tgSpec += irradiance * BRDF_GGX( directLight.direction, geometry.viewDir, geometry.normal, gF0, 1.0, gRough );');
+  function hemiPatch(sh) { sh.uniforms.uHS = U.uHS; sh.uniforms.uHG = U.uHG; sh.fragmentShader = sh.fragmentShader.replace('#include <common>', '#include <common>\nuniform vec3 uHS;\nuniform vec3 uHG;').replace('#include <aomap_fragment>', HEMI_GLSL); }
+  // 低配的景物材质：漫反射（Lambert）+ 补上的天光 + 一次噪声细节，不算镜面高光、环境反射和噪声凹凸。风吹草木、主角处的透视照旧
+  function patchLite(f) {
+    return function (sh) {
+      sh.uniforms.tNoise = U.tNoise;
+      let vs = sh.vertexShader, fs = sh.fragmentShader;
+      vs = vs.replace('#include <common>', '#include <common>\nattribute vec4 pbr;\nvarying vec4 vPbr;\nvarying vec3 vOP;\nvarying vec3 vON;' + (f.see ? '\nvarying vec3 vWP;' : '') + (f.wind ? '\nuniform float uTime;' : ''));
+      if (f.wind) sh.uniforms.uTime = U.uTime;
+      vs = vs.replace('#include <begin_vertex>', '#include <begin_vertex>\nvPbr = pbr; vOP = position; vON = normal;' + windGLSL(f.wind));
+      if (f.see) vs = vs.replace('#include <project_vertex>', '#include <project_vertex>\nvWP = (modelMatrix * vec4(transformed, 1.0)).xyz;');
+      // gSpec：太阳在这一点上的高光（瓦片、漆木的光泽主要来自它），算法同物理材质（GGX），只是不查环境贴图
+      fs = fs.replace('#include <common>', '#include <common>\nvarying vec4 vPbr;\nvarying vec3 vOP;\nvarying vec3 vON;\nuniform sampler2D tNoise;\nfloat gRough = 1.0; vec3 gF0 = vec3(0.04); vec3 gSpec = vec3(0.0);' + (f.see ? '\nvarying vec3 vWP;\nuniform vec3 uP;\nuniform vec3 uPS;' : ''));
+      fs = fs.replace('#include <lights_lambert_pars_fragment>', LAMBERT_SPEC);
+      if (f.see) { sh.uniforms.uP = U.uP; sh.uniforms.uPS = U.uPS; fs = fs.replace('#include <clipping_planes_fragment>', '#include <clipping_planes_fragment>\n' + SEE_GLSL); }
+      fs = fs.replace('#include <color_fragment>', '#include <color_fragment>\n' +
+        'vec3 aN = abs(vON); vec3 dP = vOP * (vPbr.w * 64.0); vec2 dUv = (aN.x > aN.y && aN.x > aN.z) ? dP.yz : (aN.y > aN.z ? dP.xz : dP.xy);\n' +
+        'vec3 dN = texture2D(tNoise, dUv).rgb;\ndiffuseColor.rgb *= 1.0 + (dN.g * 0.45 + dN.b * 0.4 + dN.r * 0.15 - 0.5) * vPbr.z * 0.42;\n' +
+        'gRough = clamp(vPbr.x + (dN.r - 0.5) * vPbr.z * 0.25, 0.08, 1.0); gF0 = mix(vec3(0.04), diffuseColor.rgb, vPbr.y);');
+      if (f.keepN) fs = fs.replace('#include <normal_fragment_begin>', '#include <normal_fragment_begin>\nnormal = normalize(vNormal);');
+      // 近似的天光反射：不查环境贴图，按视线的反射方向朝上还是朝下取天色或地色，乘菲涅耳和光滑度。
+      // 瓦片、漆木、金属件靠它保住一层光泽，不然整片发闷、发艳；金属件的漫反射相应减掉
+      fs = fs.replace('#include <aomap_fragment>',
+        '{ vec3 vd = normalize(vViewPosition); float NoV = saturate(dot(normal, vd)); vec3 upV = normalize((viewMatrix * vec4(0.0, 1.0, 0.0, 0.0)).xyz);\n' +
+        ' float rk = dot(reflect(-vd, normal), upV) * 0.5 + 0.5; vec3 F0 = gF0; totalEmissiveRadiance += gSpec;\n' +
+        // 环境反射的“镜面系数”用物理材质同一套近似（Karis 的 EnvBRDFApprox）
+        ' vec4 rr = vPbr.x * vec4(-1.0, -0.0275, -0.572, 0.022) + vec4(1.0, 0.0425, 1.04, -0.04); float a4 = min(rr.x * rr.x, exp2(-9.28 * NoV)) * rr.x + rr.y; vec2 AB = vec2(-1.04, 1.04) * a4 + rr.zw;\n' +
+        ' reflectedLight.directDiffuse *= 1.0 - vPbr.y; diffuseColor.rgb *= 1.0 - vPbr.y; totalEmissiveRadiance += mix(uHG, uHS, rk) * (F0 * AB.x + AB.y); }\n#include <aomap_fragment>');
+      sh.vertexShader = vs; sh.fragmentShader = fs;
+      hemiPatch(sh);
+    };
+  }
+  // 草木随风摆动（wind 1 树叶、2 草丛），两种材质共用
+  const windGLSL = w => (w === 2 ? '\n{ float wk = max(position.y, 0.0); float wp = uTime * 1.7 + position.x * 0.9 + position.z * 0.7; transformed.x += sin(wp) * 0.7 * wk * wk; transformed.z += cos(wp * 0.8) * 0.4 * wk * wk; }' : '') +
+    (w === 1 ? '\n{ float wk = clamp(position.y - 0.6, 0.0, 3.0); float wp = uTime * 1.3 + position.x * 0.5 + position.z * 0.4; transformed.x += sin(wp) * 0.02 * wk + sin(uTime * 4.3 + position.x * 9.0 + position.y * 7.0) * 0.007; transformed.z += cos(wp * 0.9) * 0.013 * wk; }' : '');
+  // 主角被房檐树冠挡住时，挡住的那一小圈打散成点阵，透出主角
+  const SEE_GLSL = 'if (uPS.z > 0.0 && vWP.z > uP.z + 0.3 && vWP.y > 0.1) {\n vec2 dd = (gl_FragCoord.xy - uPS.xy) / uPS.z; dd.y *= 0.8;\n float kk = dot(dd, dd);\n' +
+    ' if (kk < 1.0) { float nz = fract(52.9829189 * fract(dot(floor(gl_FragCoord.xy), vec2(0.06711056, 0.00583715)))); if (nz > kk * kk * 0.75 + 0.12) discard; }\n}';
   function patch(f) {
     return function (sh) {
       sh.uniforms.tNoise = U.tNoise;
@@ -184,16 +254,13 @@ const G3 = (() => {
       if (f.wind) sh.uniforms.uTime = U.uTime;
       vs = vs.replace('#include <begin_vertex>', '#include <begin_vertex>\nvPbr = pbr; vOP = position; vON = normal;' +
         (f.leg ? '\n{ float la = dot(uLeg.xy, skw); float lc = cos(la), ls = sin(la); float ly = transformed.y - uLeg.z; transformed = vec3(transformed.x, uLeg.z + ly * lc - transformed.z * ls, ly * ls + transformed.z * lc); }' : '') +
-        (f.wind === 2 ? '\n{ float wk = max(position.y, 0.0); float wp = uTime * 1.7 + position.x * 0.9 + position.z * 0.7; transformed.x += sin(wp) * 0.7 * wk * wk; transformed.z += cos(wp * 0.8) * 0.4 * wk * wk; }' : '') +
-        (f.wind === 1 ? '\n{ float wk = clamp(position.y - 0.6, 0.0, 3.0); float wp = uTime * 1.3 + position.x * 0.5 + position.z * 0.4; transformed.x += sin(wp) * 0.02 * wk + sin(uTime * 4.3 + position.x * 9.0 + position.y * 7.0) * 0.007; transformed.z += cos(wp * 0.9) * 0.013 * wk; }' : ''));
+        windGLSL(f.wind));
       if (f.keepN) fs = fs.replace('#include <normal_fragment_begin>', '#include <normal_fragment_begin>\nnormal = normalize(vNormal);');
       if (f.see) vs = vs.replace('#include <project_vertex>', '#include <project_vertex>\nvWP = (modelMatrix * vec4(transformed, 1.0)).xyz;');
       fs = fs.replace('#include <common>', '#include <common>\nvarying vec4 vPbr;\nvarying vec3 vOP;\nvarying vec3 vON;\nuniform sampler2D tNoise;' + (f.see ? '\nvarying vec3 vWP;\nuniform vec3 uP;\nuniform vec3 uPS;' : ''));
       if (f.see) {
         sh.uniforms.uP = U.uP; sh.uniforms.uPS = U.uPS;
-        fs = fs.replace('#include <clipping_planes_fragment>', '#include <clipping_planes_fragment>\n' +
-          'if (uPS.z > 0.0 && vWP.z > uP.z + 0.3 && vWP.y > 0.1) {\n vec2 dd = (gl_FragCoord.xy - uPS.xy) / uPS.z; dd.y *= 0.8;\n float kk = dot(dd, dd);\n' +
-          ' if (kk < 1.0) { float nz = fract(52.9829189 * fract(dot(floor(gl_FragCoord.xy), vec2(0.06711056, 0.00583715)))); if (nz > kk * kk * 0.75 + 0.12) discard; }\n}');
+        fs = fs.replace('#include <clipping_planes_fragment>', '#include <clipping_planes_fragment>\n' + SEE_GLSL);
       }
       fs = fs.replace('#include <color_fragment>', '#include <color_fragment>\n' +
         'vec3 dW = vON * vON; dW /= (dW.x + dW.y + dW.z + 0.00001);\nvec3 dP = vOP * (vPbr.w * 64.0);\n' +
@@ -218,6 +285,13 @@ const G3 = (() => {
   }
   function stdMat(f) {
     f = f || {};
+    // scene：景物用的材质。低配时换成简化材质（人物、兵刃不带这个标记，始终是完整的 PBR）
+    if (LITE && f.scene) {
+      const m = new THREE.MeshLambertMaterial({ vertexColors: true, side: f.two ? THREE.DoubleSide : THREE.FrontSide });
+      if (f.map) { m.map = f.map; m.alphaTest = f.alphaTest || 0.42; }
+      m.onBeforeCompile = patchLite(f); m.customProgramCacheKey = () => 'g3lite' + (f.see ? 'S' : '') + (f.keepN ? 'N' : '') + (f.wind || '') + (f.map ? 'M' : '');
+      return m;
+    }
     const m = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 1, metalness: 0, side: f.two ? THREE.DoubleSide : THREE.FrontSide });
     if (f.leg) m.userData.uLeg = { value: new V3(0, 0, 0.93) };
     if (f.map) { m.map = f.map; m.alphaTest = f.alphaTest || 0.42; m.alphaToCoverage = true; }
@@ -307,17 +381,25 @@ const G3 = (() => {
   g3.rs = TEST ? 0.4 : 1;   // 自动测试时降低内部分辨率，加快无头软件渲染
   // 画质档位 [内部分辨率比例, 多重采样数]。帧率不够时先减多重采样（边缘仍有 FXAA 兜底），最后才降分辨率，而且最低只到 0.7，
   // 免得人物的脸糊掉。画质设为“高清”时锁定在第一档，“流畅”锁定在最后一档
-  const LV = [[1, 4], [1, 2], [1, 0], [0.85, 0], [0.7, 0]], QN = { auto: '自动', high: '高清', fast: '流畅' };
-  let qmode = 'auto';
-  try { const q = localStorage.getItem('yunlan_quality'); if (QN[q]) qmode = q; } catch (e) { }
-  const curLv = () => (TEST ? [0.4, 4] : qmode === 'high' ? LV[0] : qmode === 'fast' ? LV[LV.length - 1] : LV[lvl]);
-  g3.quality = () => qmode;
-  g3.perfInfo = () => ({ mode: QN[qmode], lvl, scale: curLv()[0], msaa: curLv()[1], calls: R.info.render.calls, tris: R.info.render.triangles });   // 性能读数用（见 main.js）
-  g3.setQuality = q => { if (!QN[q]) return; qmode = q; cnt = 0; ema = 16; probe = 0; noDrop = false; try { localStorage.setItem('yunlan_quality', q); } catch (e) { } };
-  g3.qualityText = () => { const L = POST ? curLv() : [1, 4]; return QN[qmode] + ' · ' + Math.round(g3.bw * L[0]) + '×' + Math.round(g3.bh * L[0]) + (L[1] ? ' · 抗锯齿×' + L[1] : ''); };
+  // 高清、低配锁在全分辨率（多重采样按设置）；流畅锁在最后一档；自动按帧率在各档之间升降。多重采样都不超过设置里的上限
+  const LV = [[1, 4], [1, 2], [1, 0], [0.85, 0], [0.7, 0]];
+  const curLv = () => { if (TEST) return [0.4, 4]; const L = gmode === 'auto' ? LV[lvl] : gmode === 'fast' ? LV[LV.length - 1] : LV[0]; return [L[0], Math.min(L[1], gfx.msaa)]; };
+  g3.quality = () => gmode;
+  g3.perfInfo = () => ({ mode: GFX_MODE[gmode] + (Object.keys(gover).length ? '（自定义）' : ''), lvl, scale: curLv()[0], msaa: curLv()[1], calls: R.info.render.calls, tris: R.info.render.triangles });   // 性能读数用（见 main.js）
+  const gfxSave = () => { try { localStorage.setItem('yunlan_quality', gmode); localStorage.setItem('yunlan_gfx', JSON.stringify(gover)); } catch (e) { } };
+  const gfxApply = () => { for (const k in GFX_DEF) gfx[k] = k in gover ? gover[k] : k in GFX_PRE[gmode] ? GFX_PRE[gmode][k] : GFX_DEF[k]; cnt = 0; ema = 16; probe = 0; noDrop = false; gfxSave(); };
+  // 换档：各分项回到这一档的默认
+  g3.setQuality = q => { if (!GFX_PRE[q]) return; gmode = q; gover = {}; gfxApply(); };
+  // 单独改一项；和这一档的默认相同就不算改过
+  g3.setGfx = (k, v) => { if (!(k in GFX_DEF)) return; const d = k in GFX_PRE[gmode] ? GFX_PRE[gmode][k] : GFX_DEF[k]; if (v === d) delete gover[k]; else gover[k] = v; gfxApply(); };
+  g3.gfxOpts = GFX_OPT; g3.gfxModes = GFX_MODE; g3.gfxCustom = () => Object.keys(gover).length > 0;
+  g3.gfxStale = () => GFX_OPT.filter(o => !o[3] && gfx[o[0]] !== gfxBoot[o[0]]).map(o => o[0]);   // 改了、但要刷新页面才生效的几项
+  g3.qualityText = () => { const L = POST ? curLv() : [1, 4]; return GFX_MODE[gmode] + ' · ' + Math.round(g3.bw * L[0]) + '×' + Math.round(g3.bh * L[0]) + (L[1] ? ' · 抗锯齿×' + L[1] : ''); };
+  const BLACK = new THREE.DataTexture(new Uint8Array([0, 0, 0, 255]), 1, 1, THREE.RGBAFormat); BLACK.needsUpdate = true;   // 关掉泛光时给合成那一步的空白泛光图
   /* 渲染一帧。o：{exp 曝光, bloom 泛光量, thr 泛光阈值, sat, con, vig, to 输出目标, keepA 保留透明通道, set 指定缓冲组} */
   function present(sc, cam, o) {
     o = o || {}; R.info.reset(); frameNo++;
+    const hm = sc.userData && sc.userData.hemi; if (hm) { U.uHS.value.copy(hm[0]); U.uHG.value.copy(hm[1]); }   // 简化材质的天光换成这个场景的
     if (!POST) {
       R.toneMappingExposure = o.exp || 1; R.setRenderTarget(o.to || null);
       if (o.keepA) { R.setClearColor(0x000000, 0); R.clear(); }
@@ -332,7 +414,7 @@ const G3 = (() => {
       // 再往下是降分辨率，要到 30 毫秒才动。降了一档之后帧时间若没有明显变短，说明慢不在显卡上（比如屏幕本身只刷 30 帧），
       // 就退回原档，以后不再往下降，免得白白把画面弄糊
       const now = performance.now(), dtm = now - lastT; lastT = now;
-      if (ADAPT && qmode === 'auto' && dtm < 500) {
+      if (ADAPT && gmode === 'auto' && dtm < 500) {
         ema += (dtm - ema) * 0.05; cnt++;
         if (probe && cnt > 150) { if (ema > probe * 0.9) { lvl--; noDrop = true; } probe = 0; cnt = 0; }
         else if (!probe && !noDrop && cnt > 90 && ema > (LV[lvl][1] ? 21 : 30) && lvl < LV.length - 1) { probe = ema; lvl++; cnt = 0; }
@@ -340,7 +422,7 @@ const G3 = (() => {
       }
       const L = curLv(); g3.rs = L[0];
       // 超采样（o.ss）：以高于屏幕的分辨率渲染再缩小，细小的东西（五官、发丝）更清楚。只在画质没被降档、像素总量不过大时启用
-      let ss = o.ss && !TEST && qmode !== 'fast' && (qmode === 'high' || lvl === 0) ? o.ss : 1;
+      let ss = o.ss && gfx.ss && !TEST && gmode !== 'fast' && (gmode !== 'auto' || lvl === 0) ? o.ss : 1;
       if (ss > 1) ss = Math.max(1, Math.min(ss, Math.sqrt(3840 * 2160 / (g3.bw * g3.bh))));
       const w = Math.max(2, Math.round(g3.bw * g3.rs * ss)), h = Math.max(2, Math.round(g3.bh * g3.rs * ss));
       if (!mainSet || mainSet.w !== w || mainSet.h !== h || mainSet.sm !== L[1]) { if (mainSet) freeSet(mainSet); mainSet = mkSet(w, h, L[1]); }
@@ -350,11 +432,15 @@ const G3 = (() => {
     if (o.keepA) { R.setClearColor(0x000000, 0); R.clear(); }
     R.render(sc, cam);
     if (o.keepA) R.setClearColor(0x000000, 1);
+    // 泛光：缩小五次再放大回来，共九遍全屏的绘制。设置里关掉时整段跳过（灯火、技能少一圈光晕）
+    const bloomOn = !!(gfx.bloom || o.set);
     let src = s.rt, sw = s.w, sh = s.h;
-    for (let i = 0; i < 5; i++) { mDown.uniforms.tD.value = src.texture; mDown.uniforms.uT.value.set(1 / sw, 1 / sh); mDown.uniforms.uThr.value = i === 0 ? (o.thr || 1.0) : 0; pass(mDown, s.d[i]); src = s.d[i]; sw = src.width; sh = src.height; }
-    for (let i = 3; i >= 0; i--) { mUp.uniforms.tD.value = src.texture; mUp.uniforms.tA.value = s.d[i].texture; mUp.uniforms.uT.value.set(0.5 / src.width, 0.5 / src.height); pass(mUp, s.u[i]); src = s.u[i]; }
+    if (bloomOn) {
+      for (let i = 0; i < 5; i++) { mDown.uniforms.tD.value = src.texture; mDown.uniforms.uT.value.set(1 / sw, 1 / sh); mDown.uniforms.uThr.value = i === 0 ? (o.thr || 1.0) : 0; pass(mDown, s.d[i]); src = s.d[i]; sw = src.width; sh = src.height; }
+      for (let i = 3; i >= 0; i--) { mUp.uniforms.tD.value = src.texture; mUp.uniforms.tA.value = s.d[i].texture; mUp.uniforms.uT.value.set(0.5 / src.width, 0.5 / src.height); pass(mUp, s.u[i]); src = s.u[i]; }
+    }
     const u = mFinal.uniforms;
-    u.tS.value = s.rt.texture; u.tB.value = src.texture; u.uBloom.value = o.bloom == null ? 0.09 : o.bloom; u.uExp.value = o.exp || 1; u.uSat.value = o.sat || 1; u.uCon.value = o.con || 1;
+    u.tS.value = s.rt.texture; u.tB.value = bloomOn ? src.texture : BLACK; u.uBloom.value = !bloomOn ? 0 : o.bloom == null ? 0.09 : o.bloom; u.uExp.value = o.exp || 1; u.uSat.value = o.sat || 1; u.uCon.value = o.con || 1;
     if (o.tint) u.uTint.value.set(o.tint[0], o.tint[1], o.tint[2]); else u.uTint.value.set(1, 1, 1);   // 调色（如夜景偏蓝压暗）；加在泛光之前，灯火的光晕保持原色
     u.uVig.value = o.vig || 0; u.uTime.value = frameNo % 61; u.uKeepA.value = o.keepA ? 1 : 0; u.uT.value.set(1 / s.w, 1 / s.h);
     u.uSharp.value = SHARP != null ? +SHARP : s === mainSet ? (g3.rs < 1 ? 0.9 : 0.55) : 0;
@@ -364,6 +450,6 @@ const G3 = (() => {
 
   /* ---------- 画布尺寸 ---------- */
   g3.resize = (w, h, pr) => { R.setPixelRatio(pr); R.setSize(w, h, false); g3.bw = Math.max(2, Math.round(w * pr)); g3.bh = Math.max(2, Math.round(h * pr)); g3.aspect = w / h; };
-  g3.k = { R, GB, M, sph, box, cyl, ico, lathe, geo, lin, LC, canvasTex, glowTex, glowSprite, noiseTex, matGlow, stdMat, envFor, present, mkSet, freeSet, U, V3 };
+  g3.k = { R, GB, M, sph, box, cyl, ico, lathe, geo, lin, LC, canvasTex, glowTex, glowSprite, noiseTex, matGlow, stdMat, envFor, present, mkSet, freeSet, U, V3, hemiPatch };
   return g3;
 })();

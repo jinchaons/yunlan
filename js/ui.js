@@ -37,12 +37,13 @@ const UI = (() => {
 <div id="shop" class="hide overlay"></div>
 <div id="result" class="hide overlay"></div>
 <div id="aiset" class="hide overlay"></div>
+<div id="gfxset" class="hide overlay"></div>
 <div id="banner"><div id="bn-t"></div><div id="bn-s"></div></div>
 <div id="toasts"></div>
 <div id="narr" class="hide"><div id="narr-in"></div><div id="narr-next">点击继续</div></div>
 <div id="title" class="hide">
   <div id="t-logo"><div id="t-seal">侠</div><h1>云岚侠影录</h1><p>原创国风武侠 · 角色扮演</p></div>
-  <div id="t-btns"><button id="t-new" class="btn big">新的旅程</button><button id="t-cont" class="btn big">继续旅程</button><div id="t-two"><button id="t-help" class="btn big ghost">操作说明</button><button id="t-aiset" class="btn big ghost">AI 设置</button></div></div>
+  <div id="t-btns"><button id="t-new" class="btn big">新的旅程</button><button id="t-cont" class="btn big">继续旅程</button><div id="t-two"><button id="t-help" class="btn big ghost">操作说明</button><button id="t-aiset" class="btn big ghost">AI 设置</button><button id="t-gfx" class="btn big ghost">画质</button></div></div>
   <div id="t-foot">原创作品 · 所有人物、门派与剧情均为虚构<span id="t-ai"></span></div>
 </div>
 <div id="fade"></div><div id="err" class="hide"></div>`;
@@ -50,11 +51,15 @@ const UI = (() => {
     $('narr').addEventListener('click', () => advance());
     $('h-menu').addEventListener('click', () => { Sfx.play('ui'); toggleMenu(); });
     $('h-snd').addEventListener('click', () => { const on = Sfx.toggle(); $('h-snd').classList.toggle('off', !on); });
-    // 画质：自动（按帧率调整）→ 高清（锁定全分辨率）→ 流畅，点一下切换，并提示当前实际的渲染分辨率
-    if (!G3.ok) { $('h-q').classList.add('hide'); $('h-zoom').classList.add('hide'); }
+    // 画质：打开画质设置面板（档位 + 各分项）
+    if (!G3.ok) { $('h-q').classList.add('hide'); $('h-zoom').classList.add('hide'); $('t-gfx').classList.add('hide'); }
     // “视野”按钮：五档视野轮流切换（默认 → 较远 → 最远 → 较近 → 最近）；用滚轮调到了别的位置时，先回到默认
     $('h-zoom').addEventListener('click', () => { if (G.scene !== 'world' || !G3.ok) return; Sfx.play('ui'); toast('视野：' + G3.world.stepZoom()); });
-    $('h-q').addEventListener('click', () => { Sfx.play('ui'); const order = ['auto', 'high', 'fast']; G3.setQuality(order[(order.indexOf(G3.quality()) + 1) % 3]); toast('画质：' + G3.qualityText()); });
+    $('h-q').addEventListener('click', () => { if (G.busy && !menu.open) return; Sfx.play('ui'); gfxPanel(true); });
+    $('t-gfx').addEventListener('click', () => { Sfx.play('ui'); gfxPanel(true); });
+    $('gfxset').addEventListener('click', onGfxClick);
+    $('gfxset').addEventListener('keydown', e => { e.stopPropagation(); if (e.key === 'Escape') gfxPanel(false); });
+    $('gfxset').addEventListener('keyup', e => e.stopPropagation());
     $('b-auto').addEventListener('click', () => { Sfx.play('ui'); Battle.setAuto(!Battle.auto); });
     $('b-speed').addEventListener('click', () => { Sfx.play('ui'); Battle.speed = Battle.speed === Battle.SPEEDS[0] ? Battle.SPEEDS[1] : Battle.SPEEDS[0]; $('b-speed').textContent = '速度 ×' + (Battle.speed === Battle.SPEEDS[0] ? 1 : 2); });
     $('menu').addEventListener('click', onMenuClick);
@@ -151,6 +156,39 @@ const UI = (() => {
       $('ai-models').innerHTML = r.list.map(m => '<option value="' + esc(m) + '"></option>').join('');
       aiMsg('取到 ' + r.list.length + ' 个模型：在“模型”框里输入几个字母（或清空后点一下）即可从列表里选。', 'ok');
     }
+  }
+  /* ---------- 画质设置：四个档位，外加各分项单独调（见 g3.js 的 GFX_OPT） ---------- */
+  let gfxOpen = false;
+  const GFX_DESC = {
+    auto: '按帧率自动调整：跟不上时先减抗锯齿，再降分辨率（降到后面几档时主角也会略糊）。',
+    high: '各项都照最好的来，分辨率锁定不降。适合独立显卡。',
+    fast: '分辨率降到七成，不做多重采样。主角也会跟着略糊。',
+    low: '给集成显卡用：景物、草丛、其他人物和后期都简化，帧率封顶 30。分辨率不降，四位主角的模型、贴图和材质照旧。'
+  };
+  function gfxPanel(on) {
+    const A = $('gfxset');
+    if (!on) { gfxOpen = false; A.classList.add('hide'); A.innerHTML = ''; return; }
+    gfxOpen = true; gfxRender(); A.classList.remove('hide');
+  }
+  function gfxRender() {
+    const q = G3.quality(), g = G3.gfx, M = G3.gfxModes, stale = G3.gfxStale(), name = k => G3.gfxOpts.find(o => o[0] === k)[1];
+    let h = '<div class="panel aip"><div class="tabs"><span class="ttl">画质设置</span><button class="x" data-act="close">✕</button></div><div class="aibody">' +
+      '<div class="airow"><span>档位</span><div class="gfxmodes">' + ['auto', 'high', 'fast', 'low'].map(k => '<button class="btn sm' + (k === q ? '' : ' ghost') + '" data-mode="' + k + '">' + M[k] + '</button>').join('') + '</div></div>' +
+      '<p class="aitip gfxdesc">' + GFX_DESC[q] + (G3.gfxCustom() ? '　<b>下面有几项单独改过。</b>' : '') + '</p>';
+    h += G3.gfxOpts.map(o => { const cur = o[2].find(x => x[0] === g[o[0]]) || o[2][0]; return '<div class="airow gfxrow"><span>' + o[1] + '</span><button class="btn sm ghost" data-gfx="' + o[0] + '">' + cur[1] + '</button><small>' + (o[3] ? '立即生效' : '刷新后生效') + '</small></div>'; }).join('');
+    h += '<p class="aimsg' + (stale.length ? ' bad' : ' ok') + '">' + (stale.length ? '还有 ' + stale.length + ' 项要刷新页面才生效：' + stale.map(name).join('、') + '。' : '当前：' + G3.qualityText()) + '</p>' +
+      '<div class="aibtns">' + (stale.length ? '<button class="btn" data-act="reload">' + (S && G.scene === 'world' ? '保存进度并刷新' : '刷新页面') + '</button>' : '') + '<button class="btn ghost" data-act="close">关闭</button></div>' +
+      '<p class="ainote">每一项点一下就换到下一个选项。按 F3 打开性能读数，可以看到帧率和每帧画了多少东西。<br>设置只存在这台电脑的浏览器里，不进存档。</p></div></div>';
+    $('gfxset').innerHTML = h;
+  }
+  function onGfxClick(e) {
+    const t = e.target.closest('button'); if (!t) { if (e.target.id === 'gfxset') gfxPanel(false); return; }
+    const d = t.dataset; Sfx.play('ui');
+    if (d.act === 'close') { gfxPanel(false); return; }
+    if (d.act === 'reload') { if (S && G.scene === 'world') G.save(); location.reload(); return; }
+    if (d.mode) G3.setQuality(d.mode);
+    else if (d.gfx) { const o = G3.gfxOpts.find(x => x[0] === d.gfx), i = o[2].findIndex(x => x[0] === G3.gfx[d.gfx]); G3.setGfx(d.gfx, o[2][(i + 1) % o[2].length][0]); }
+    gfxRender();
   }
   /* ---------- 自由交谈（AI 人物）与同伴闲聊 ---------- */
   let askRes = null;
@@ -321,6 +359,7 @@ const UI = (() => {
   }
   function toggleMenu(tab) {
     if (aiOpen) { aiPanel(false); return; }
+    if (gfxOpen) { gfxPanel(false); return; }
     if (menu.open) { menu.open = false; $('menu').classList.add('hide'); hud(); return; }
     if (G.scene !== 'world' || G.busy) return;
     menu = { open: true, tab: tab || 'party', sel: 0, slot: null, useItem: null };
@@ -386,6 +425,7 @@ const UI = (() => {
         '<button class="btn big" data-act="diff">难度：' + DIFFS[S.diff || 0].n + '</button>' +
         '<button class="btn big" data-act="avatar"' + (S.party.length > 1 ? '' : ' disabled') + '>大地图形象：' + CHARS[S.party.some(m => m.id === S.avatar) ? S.avatar : 'hero'].name + '</button>' +
         '<button class="btn big" data-act="ai">AI 人物：' + AI.label() + '</button>' +
+        (G3.ok ? '<button class="btn big" data-act="gfx">画质：' + G3.gfxModes[G3.quality()] + (G3.gfxCustom() ? '（自定义）' : '') + '</button>' : '') +
         '<button class="btn big" data-act="perf">性能读数：' + (G.perfOn ? '开' : '关') + '（F3）</button>' +
         '<button class="btn big ghost" data-act="title">返回标题</button>' +
         '<p class="tip">游戏会在切换地图、战斗胜利后自动保存。<br>游玩时间 ' + Math.floor(S.time / 60) + ' 分钟</p></div>';
@@ -419,6 +459,7 @@ const UI = (() => {
     else if (d.act === 'diff') { S.diff = ((S.diff || 0) + 1) % DIFFS.length; DIFF = S.diff; toast('难度：<b>' + DIFFS[DIFF].n + '</b>'); }
     else if (d.act === 'avatar') { const ids = S.party.map(m => m.id); S.avatar = ids[(Math.max(0, ids.indexOf(S.avatar)) + 1) % ids.length]; toast('大地图上由 <b>' + CHARS[S.avatar].name + '</b> 领路'); G.save(); }
     else if (d.act === 'ai') { aiPanel(true); return; }
+    else if (d.act === 'gfx') { gfxPanel(true); return; }
     else if (d.act === 'perf') G.perfToggle();
     else if (d.act === 'town') { toggleMenu(); G.warpTown(); return; }
     else if (d.act === 'title') { toggleMenu(); G.toTitle(); return; }
@@ -582,7 +623,7 @@ const UI = (() => {
     if (on) { $('t-cont').disabled = !G.hasSave(); if (typeof AI !== 'undefined') AI.paint(); }
   }
   function err(msg) { const e = $('err'); e.textContent = msg; e.classList.remove('hide'); }
-  function busyUI() { return menu.open || aiOpen || !!shopRes || !!dlg.res || !!chooseRes || !!narrRes || !$('result').classList.contains('hide') || !$('ask').classList.contains('hide'); }
+  function busyUI() { return menu.open || aiOpen || gfxOpen || !!shopRes || !!dlg.res || !!chooseRes || !!narrRes || !$('result').classList.contains('hide') || !$('ask').classList.contains('hide'); }
 
-  return { init, say, choose, toast, banner, fade, fadeNote, flash, narrate, advance, update, hud, showHud, toggleMenu, shop, b, title, err, busyUI, askOpen, askSet, askInput, askClose, banter, chooseKey, aiPanel, menuOpen: () => menu.open, $ };
+  return { init, say, choose, toast, banner, fade, fadeNote, flash, narrate, advance, update, hud, showHud, toggleMenu, shop, b, title, err, busyUI, askOpen, askSet, askInput, askClose, banter, chooseKey, aiPanel, gfxPanel, menuOpen: () => menu.open, $ };
 })();

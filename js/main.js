@@ -160,12 +160,15 @@ function perfTick(ms) {
   const q = G3.ok && G3.perfInfo ? G3.perfInfo() : null;
   PERF.el.textContent = '帧率 ' + (1000 / (sum / N)).toFixed(0) + '（平均每帧 ' + (sum / N).toFixed(1) + ' 毫秒，最近 ' + N + ' 帧）\n' +
     '最慢一帧 ' + worst.toFixed(0) + ' 毫秒　掉帧 ' + slow + ' 次，其中超过 50 毫秒的 ' + bad + ' 次\n' +
-    (q ? '画质 ' + q.mode + ' 第 ' + (q.lvl + 1) + ' 档　渲染 ' + Math.round(G3.bw * q.scale) + '×' + Math.round(G3.bh * q.scale) + (q.msaa ? '　抗锯齿×' + q.msaa : '　无多重采样') + '\n绘制批次 ' + q.calls + '　三角面 ' + (q.tris / 1e4).toFixed(1) + ' 万' : '2D 模式') +
+    (q ? '画质 ' + q.mode + (G3.quality() === 'auto' ? ' 第 ' + (q.lvl + 1) + ' 档' : '') + '　渲染 ' + Math.round(G3.bw * q.scale) + '×' + Math.round(G3.bh * q.scale) + (q.msaa ? '　抗锯齿×' + q.msaa : '　无多重采样') + '\n绘制批次 ' + q.calls + '　三角面 ' + (q.tris / 1e4).toFixed(1) + ' 万' : '2D 模式') +
     (typeof World !== 'undefined' && World.map && G.scene === 'world' ? '　' + World.map.d.name : '');
 }
 window.addEventListener('keydown', e => { if (e.code === 'F3') { e.preventDefault(); G.perfToggle(); } });
 let last = 0;
 function frame(ts) {
+  // 画质设置里的“帧率上限”：离上一帧还不到 1/上限 秒就不画这一帧（留 3 毫秒余量，免得在 60 赫兹的屏上落成 20 帧）
+  const cap = G3.ok && G3.gfx ? G3.gfx.cap : 0;
+  if (cap && last && ts - last < 1000 / cap - 3) { requestAnimationFrame(frame); return; }
   perfTick(ts - last);
   const dt = Math.min(0.05, Math.max(0, (ts - last) / 1000 || 0)); last = ts; G.t += dt; G.dt = dt;
   if (G.devIdle) { requestAnimationFrame(frame); return; }   // 开发检视（模型 / 动作连拍）时不画主画面

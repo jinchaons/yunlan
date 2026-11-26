@@ -208,6 +208,14 @@ button.irow { cursor: pointer; } button.irow:hover { background: rgba(232, 198, 
 #t-two .btn.big { min-width: 0; width: 6.7rem; padding: .7rem 0; font-size: 1rem; }
 /* AI 设置面板 */
 #aiset { z-index: 5; }
+#gfxset { z-index: 5; }
+/* 画质设置：档位一排按钮，各分项“名称 | 当前选项（点一下换） | 何时生效” */
+.gfxmodes { display: flex; gap: .5rem; flex-wrap: wrap; grid-column: 2 / 4; }
+.gfxdesc { margin: -.2rem 0 .2rem; }
+.airow.gfxrow { grid-template-columns: 9rem minmax(0, 1fr) 5.2rem; gap: .5rem; }
+.gfxrow .btn.sm { justify-self: stretch; text-align: left; padding-left: .8rem; }
+.gfxrow small { font-size: .76rem; color: rgba(230, 236, 255, .55); text-align: right; }
+@media (max-width: 560px) { .airow.gfxrow { grid-template-columns: 6.6rem minmax(0, 1fr) 4rem; } }
 .aip { width: min(38rem, 96vw); max-height: 94vh; display: flex; flex-direction: column; }
 .aip .tabs { align-items: center; padding-bottom: .3rem; } .aip .tabs .x { margin: 0 0 .3rem auto; }
 .aibody { padding: 1rem 1.3rem 1.1rem; overflow: auto; display: flex; flex-direction: column; gap: .7rem; }

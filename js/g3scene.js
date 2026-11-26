@@ -558,13 +558,21 @@
 
   /* ---------- 建筑部件 ---------- */
   const LAT = '#3a2618';
+  /* 写着字的东西（匾、幌子、牌坊）用的材质：在画面的透明通道里记 0，最后合成时的边缘平滑（FXAA）和锐化就跳过这些像素。
+     FXAA 分不清“物体的边”和“贴图里的字”，金字黑底对比又强，镜头每挪一点它就把笔画重新抹一遍，字一闪一闪地发毛、看不清。
+     字本身有贴图的多级缩小（mipmap）管着，用不着再平滑。没有后期（直接画到屏幕上）时不做这一步，免得字变成透明 */
+  function textMat(p) {
+    const m = new THREE.MeshBasicMaterial(p);
+    if (G3.post) { m.onBeforeCompile = sh => { sh.fragmentShader = sh.fragmentShader.replace('#include <output_fragment>', '#include <output_fragment>\ngl_FragColor.a = 0.0;'); }; m.customProgramCacheKey = () => 'g3text'; }
+    return m;
+  }
   // 横匾（朝南，略向后仰）；ry 另转一个朝向
   function signPlane(dyn, text, x, y, z, tilt, k, ry) {
     const n = text.length, tex = K.canvasTex(64 * n + 40, 96, (c, W, H) => {
       c.fillStyle = '#17131e'; c.fillRect(0, 0, W, H); c.strokeStyle = '#c9a44e'; c.lineWidth = 6; c.strokeRect(5, 5, W - 10, H - 10);
       c.fillStyle = '#e8c878'; c.font = 'bold 58px ' + FONT_K; c.textAlign = 'center'; c.textBaseline = 'middle'; c.fillText(text, W / 2, H / 2 + 3);
     });
-    const me = new THREE.Mesh(new THREE.PlaneGeometry((0.34 * n + 0.2) * (k || 1), 0.46 * (k || 1)), new THREE.MeshBasicMaterial({ map: tex, side: ry ? THREE.DoubleSide : THREE.FrontSide }));
+    const me = new THREE.Mesh(new THREE.PlaneGeometry((0.34 * n + 0.2) * (k || 1), 0.46 * (k || 1)), textMat({ map: tex, side: ry ? THREE.DoubleSide : THREE.FrontSide }));
     me.position.set(x, y, z); me.rotation.order = 'YXZ'; me.rotation.y = ry || 0; me.rotation.x = tilt; dyn.add(me);
   }
   // 幌子：一根杆子挑着一面竖幅，上面写着字
@@ -575,7 +583,7 @@
       c.fillStyle = col; c.fillRect(0, 0, W, H); c.strokeStyle = 'rgba(255,236,190,.85)'; c.lineWidth = 5; c.strokeRect(5, 5, W - 10, H - 10);
       c.fillStyle = '#fff2d0'; c.font = 'bold 56px ' + FONT_K; c.textAlign = 'center'; c.textBaseline = 'middle'; for (let i = 0; i < n; i++) c.fillText(text[i], W / 2, 52 + i * 64);
     });
-    const me = new THREE.Mesh(new THREE.PlaneGeometry(0.36, bh), new THREE.MeshBasicMaterial({ map: tex, side: THREE.DoubleSide, color: LC('#ffffff', 0.8) }));
+    const me = new THREE.Mesh(new THREE.PlaneGeometry(0.36, bh), textMat({ map: tex, side: THREE.DoubleSide, color: LC('#ffffff', 0.8) }));
     me.position.set(x + 0.24, h - 0.12 - bh / 2, z + 0.01); me.rotation.x = -0.06; dyn.add(me);
   }
   function hangLantern(L, Gl, fx, lx, ly, lz, dark, s) {
@@ -904,7 +912,7 @@
         c.fillStyle = '#17131e'; c.fillRect(0, 0, W, H); c.strokeStyle = '#c9a44e'; c.lineWidth = 6; c.strokeRect(5, 5, W - 10, H - 10);
         c.fillStyle = '#e8c878'; c.font = 'bold 58px ' + FONT_K; c.textAlign = 'center'; c.textBaseline = 'middle'; c.fillText(sp.sign, W / 2, H / 2 + 3);
       });
-      const me = new THREE.Mesh(new THREE.PlaneGeometry(0.34 * n + 0.2, 0.46), new THREE.MeshBasicMaterial({ map: tex }));
+      const me = new THREE.Mesh(new THREE.PlaneGeometry(0.34 * n + 0.2, 0.46), textMat({ map: tex }));
       me.position.set(cx, ry + 0.54, zf + 0.38); me.rotation.x = -0.6; dyn.add(me);
     }
     if (sp.flag) for (const s of [-1, 1]) banner(L, dyn, sp.flag, cx + s * (w / 2 - 0.2) - (s > 0 ? 0.42 : 0), zf + 0.02, 3.1, sp.flagC || '#a8362a');
@@ -995,7 +1003,7 @@
       for (const q of m.d.gates || []) { const dd = Math.abs(q.x - cx) + Math.abs(q.y - cz); if (dd < bd) { bd = dd; nm = q.name; } }
       if (nm) {
         const n = nm.length, tex = K.canvasTex(64 * n + 40, 96, (c, W, H) => { c.fillStyle = '#1a1620'; c.fillRect(0, 0, W, H); c.strokeStyle = '#c9a44e'; c.lineWidth = 6; c.strokeRect(5, 5, W - 10, H - 10); c.fillStyle = '#f0d488'; c.font = 'bold 58px ' + FONT_K; c.textAlign = 'center'; c.textBaseline = 'middle'; c.fillText(nm, W / 2, H / 2 + 3); });
-        const me = new THREE.Mesh(new THREE.PlaneGeometry(0.42 * n + 0.24, 0.56), new THREE.MeshBasicMaterial({ map: tex }));
+        const me = new THREE.Mesh(new THREE.PlaneGeometry(0.42 * n + 0.24, 0.56), textMat({ map: tex }));
         me.position.set(cx, 3.15, cz + (g.vert ? lenZ / 2 + 0.36 : 1.08)); me.rotation.x = -0.55; dyn.add(me);
       }
     }

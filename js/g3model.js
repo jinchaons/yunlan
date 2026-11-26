@@ -174,7 +174,7 @@
       im.src = url;
       return tex[key] = t;
     };
-    const T = { id, pending: 0, prims: [], mats: [] }, at0 = { tan: true };
+    const T = { id, pending: 0, prims: [], mats: [], low: !!cap }, at0 = { tan: true };
     // 蒙皮网格
     const skinIdx = (g.nodes.find(n => n.mesh != null && n.skin != null) || {}).skin || 0, skin = g.skins[skinIdx];
     let y0 = Infinity, y1 = -Infinity;
@@ -608,7 +608,9 @@
       uLidC: { value: new V3(lc[0], lc[1], lc[2]) }, uBlink: { value: 0 }, uFaceZ: { value: T.faceZ || 0 }, uRim: { value: 0 }, uSway: { value: new V3() },
       uSmooth: { value: new THREE.Vector2(FK != null ? FK : T.smooth[0], SNKQ != null ? SNKQ : T.smooth[1]) } };   // 平滑法线的比例：[脸与皮肤, 其余部位]
     const mm = T.mats.map(m => {
-      const mt = new THREE.MeshStandardMaterial({ map: m.map, normalMap: NO_NM ? null : m.normalMap, roughnessMap: m.mr, metalnessMap: m.mr, roughness: m.rough, metalness: m.mr ? m.metal : Math.min(m.metal, 0.2) });
+      // 简化过贴图的人物（T.low，见 parse）：没有粗糙度贴图时，模型里写的粗糙度往往偏小（本来要靠贴图调粗），衣服会亮得像抹了油，
+      // 镜头一动高光就跳（看着是一闪一闪的）。所以定成偏哑光的布料，不带金属感
+      const mt = new THREE.MeshStandardMaterial({ map: m.map, normalMap: NO_NM ? null : m.normalMap, roughnessMap: m.mr, metalnessMap: m.mr, roughness: T.low ? Math.max(m.rough, 0.78) : m.rough, metalness: T.low ? 0 : m.mr ? m.metal : Math.min(m.metal, 0.2) });
       mt.color.setRGB(m.color[0], m.color[1], m.color[2]); if (m.flipN) mt.normalScale.y = -1; mats.push(mt); lit.push(mt);
       Object.assign(mt.userData, eyeU); mt.userData.map0 = mt.map; mt.userData.nm0 = mt.normalMap;
       mt.onBeforeCompile = charPatch; mt.customProgramCacheKey = () => 'g3model-char';

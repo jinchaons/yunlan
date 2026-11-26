@@ -355,7 +355,7 @@ const G3 = (() => {
     'vec3 sharpen(vec3 mid){ vec3 m = mid / (1.0 + lum(mid)), n = tm(vUv + vec2(0.0, uT.y)), s = tm(vUv - vec2(0.0, uT.y)), e = tm(vUv + vec2(uT.x, 0.0)), w = tm(vUv - vec2(uT.x, 0.0));\n' +
     ' vec3 lo = min(m, min(min(n, s), min(e, w))), hi = max(m, max(max(n, s), max(e, w)));\n' +
     ' vec3 r = clamp(m + (m - (n + s + e + w) * 0.25) * uSharp, lo, hi); return r / max(1.0 - lum(r), 0.001); }\n' +
-    'void main(){ vec4 s = texture2D(tS, vUv); vec3 c = max(s.rgb, 0.0); if (uKeepA > 0.5) { if (s.a > 0.001) c /= s.a; } else { if (uFxaa > 0.5) c = fxaa(c); if (uSharp > 0.0) c = sharpen(c); }\n' +
+    'void main(){ vec4 s = texture2D(tS, vUv); vec3 c = max(s.rgb, 0.0); if (uKeepA > 0.5) { if (s.a > 0.001) c /= s.a; } else if (s.a > 0.01) { if (uFxaa > 0.5) c = fxaa(c); if (uSharp > 0.0) c = sharpen(c); }\n' +   // 透明通道记了 0 的（写着字的匾、幌子）不做平滑和锐化
     ' c *= uTint; c += texture2D(tB, vUv).rgb * uBloom; c = aces(c * uExp);\n' +
     ' float l = dot(c, vec3(0.2126, 0.7152, 0.0722)); c = mix(vec3(l), c, uSat); c = (c - 0.5) * uCon + 0.5;\n' +
     ' vec2 q = vUv - 0.5; c *= 1.0 - uVig * smoothstep(0.2, 0.9, dot(q, q) * 2.0); c = clamp(c, 0.0, 1.0);\n' +
@@ -365,7 +365,9 @@ const G3 = (() => {
     { tS: { value: null }, tB: { value: null }, uBloom: { value: 0.1 }, uExp: { value: 1 }, uSat: { value: 1 }, uCon: { value: 1 }, uVig: { value: 0 }, uTime: { value: 0 }, uKeepA: { value: 0 }, uT: { value: new THREE.Vector2() }, uFxaa: { value: /[?&]fxaa=0/.test(QS) ? 0 : 1 }, uSharp: { value: 0 }, uTint: { value: new THREE.Vector3(1, 1, 1) } });
   const SHARP = (/[?&]sharp=([\d.]+)/.exec(QS) || [0, null])[1];
   function mkSet(w, h, samples) {
-    const sm = samples == null ? 4 : samples, s = { w, h, sm, rt: new THREE.WebGLRenderTarget(w, h, { type: THREE.HalfFloatType, samples: sm }), d: [], u: [] };
+    // 深度缓冲要 24 位：three.js 默认给渲染目标的是 16 位，镜头二三十格远的地方只分得清两厘米上下的前后，
+    // 招牌和梁、人物衣服的里外几层贴得比这还近，镜头一动就轮流露出来（闪）。带上模板缓冲，深度就是 24 位的（DEPTH24_STENCIL8）
+    const sm = samples == null ? 4 : samples, s = { w, h, sm, rt: new THREE.WebGLRenderTarget(w, h, { type: THREE.HalfFloatType, samples: sm, stencilBuffer: !/[?&]z16/.test(QS) }), d: [], u: [] };
     let cw = w, ch = h;
     for (let i = 0; i < 5; i++) {
       cw = Math.max(2, cw >> 1); ch = Math.max(2, ch >> 1);

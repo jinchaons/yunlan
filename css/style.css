@@ -214,6 +214,9 @@ button.irow { cursor: pointer; } button.irow:hover { background: rgba(232, 198, 
 .gfxdesc { margin: -.2rem 0 .2rem; }
 .airow.gfxrow { grid-template-columns: 9rem minmax(0, 1fr) 5.2rem; gap: .5rem; }
 .gfxrow .btn.sm { justify-self: stretch; text-align: left; padding-left: .8rem; }
+.gfxbody { gap: .32rem; padding-top: .7rem; }
+.gfxbody .gfxrow .btn.sm { padding-top: .22rem; padding-bottom: .22rem; }
+.gfxval { font-weight: normal; font-size: .86rem; color: rgba(230, 236, 255, .85); padding: .2rem .8rem; border: 1px solid rgba(230, 236, 255, .12); border-radius: .4rem; background: rgba(255, 255, 255, .03); }
 .gfxrow small { font-size: .76rem; color: rgba(230, 236, 255, .55); text-align: right; }
 @media (max-width: 560px) { .airow.gfxrow { grid-template-columns: 6.6rem minmax(0, 1fr) 4rem; } }
 .aip { width: min(38rem, 96vw); max-height: 94vh; display: flex; flex-direction: column; }

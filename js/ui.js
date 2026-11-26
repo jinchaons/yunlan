@@ -157,14 +157,17 @@ const UI = (() => {
       aiMsg('取到 ' + r.list.length + ' 个模型：在“模型”框里输入几个字母（或清空后点一下）即可从列表里选。', 'ok');
     }
   }
-  /* ---------- 画质设置：四个档位，外加各分项单独调（见 g3.js 的 GFX_OPT） ---------- */
+  /* ---------- 画质设置：自动 / 高清 / 低配 三个固定档位只显示，自定义各分项都能改（见 g3.js 的 GFX_OPT） ---------- */
   let gfxOpen = false;
+  const GFX_MODES = ['auto', 'high', 'low', 'custom'];
   const GFX_DESC = {
-    auto: '按帧率自动调整：跟不上时先减抗锯齿，再降分辨率（降到后面几档时主角也会略糊）。下面的抗锯齿和超采样是上限，降档后会自动减。',
-    high: '各项都照最好的来，分辨率锁定不降。适合独立显卡。',
-    fast: '分辨率降到七成，不做多重采样，主角近景也不换高清贴图。主角会跟着略糊。',
-    low: '给集成显卡用：景物、草丛、其他人物和后期都简化。分辨率不降，四位主角的模型、贴图和材质照旧。'
+    auto: '其余各项同高清，按帧率自动调整：跟不上时先减抗锯齿，再降分辨率（降到 85%、70% 时主角也会略糊），帧率富余了再升回去。',
+    high: '各项都照最好的来，分辨率锁定 100%。适合独立显卡。',
+    low: '给集成显卡用：景物、草丛、其他人物和后期都简化。分辨率不降，四位主角的模型、贴图和材质照旧。',
+    custom: '每一项都由你定，点一下换到下一个选项。第一次选自定义时，从刚才那一档的设置开始；之后会记住，下次选自定义还是这一套。'
   };
+  // 自动档里随帧率变的几项，显示规则而不是数值
+  const GFX_RULE = { auto: { res: '按帧率：100% → 85% → 70%', msaa: '按帧率：4 倍 → 2 倍 → 关', ss: '开（自动降档后不用）' } };
   function gfxPanel(on) {
     const A = $('gfxset');
     if (!on) { gfxOpen = false; A.classList.add('hide'); A.innerHTML = ''; return; }
@@ -172,13 +175,19 @@ const UI = (() => {
   }
   function gfxRender() {
     const q = G3.quality(), g = G3.gfx, M = G3.gfxModes, stale = G3.gfxStale(), name = k => G3.gfxOpts.find(o => o[0] === k)[1];
-    let h = '<div class="panel aip"><div class="tabs"><span class="ttl">画质设置</span><button class="x" data-act="close">✕</button></div><div class="aibody">' +
-      '<div class="airow"><span>档位</span><div class="gfxmodes">' + ['auto', 'high', 'fast', 'low'].map(k => '<button class="btn sm' + (k === q ? '' : ' ghost') + '" data-mode="' + k + '">' + M[k] + '</button>').join('') + '</div></div>' +
-      '<p class="aitip gfxdesc">' + GFX_DESC[q] + (G3.gfxCustom() ? '　<b>下面有几项单独改过。</b>' : '') + '</p>';
-    h += G3.gfxOpts.map(o => { const cur = o[2].find(x => x[0] === g[o[0]]) || o[2][0]; return '<div class="airow gfxrow"><span>' + o[1] + '</span><button class="btn sm ghost" data-gfx="' + o[0] + '">' + (q === 'auto' && cur[0] && o[0] === 'msaa' ? '最多 ' + cur[1] : cur[1]) + '</button><small>' + (o[3] ? '立即生效' : '刷新后生效') + '</small></div>'; }).join('');
+    const edit = G3.gfxCustom(), rule = GFX_RULE[q] || {};
+    let h = '<div class="panel aip"><div class="tabs"><span class="ttl">画质设置</span><button class="x" data-act="close">✕</button></div><div class="aibody gfxbody">' +
+      '<div class="airow"><span>档位</span><div class="gfxmodes">' + GFX_MODES.map(k => '<button class="btn sm' + (k === q ? '' : ' ghost') + '" data-mode="' + k + '">' + M[k] + '</button>').join('') + '</div></div>' +
+      '<p class="aitip gfxdesc">' + GFX_DESC[q] + '</p>';
+    h += G3.gfxOpts.map(o => {
+      const cur = o[2].find(x => x[0] === g[o[0]]) || o[2][0], txt = rule[o[0]] || cur[1];
+      return '<div class="airow gfxrow"><span>' + o[1] + '</span>' +
+        (edit ? '<button class="btn sm ghost" data-gfx="' + o[0] + '">' + txt + '</button><small>' + (o[3] ? '立即生效' : '刷新后生效') + '</small>'
+          : '<b class="gfxval">' + txt + '</b><small></small>') + '</div>';
+    }).join('');
     h += '<p class="aimsg' + (stale.length ? ' bad' : ' ok') + '">' + (stale.length ? '还有 ' + stale.length + ' 项要刷新页面才生效：' + stale.map(name).join('、') + '。' : '当前：' + G3.qualityText()) + '</p>' +
       '<div class="aibtns">' + (stale.length ? '<button class="btn" data-act="reload">' + (S && G.scene === 'world' ? '保存进度并刷新' : '刷新页面') + '</button>' : '') + '<button class="btn ghost" data-act="close">关闭</button></div>' +
-      '<p class="ainote">每一项点一下就换到下一个选项。按 F3 打开性能读数，可以看到帧率和每帧画了多少东西。<br>设置只存在这台电脑的浏览器里，不进存档。</p></div></div>';
+      '<p class="ainote">' + (edit ? '每一项点一下就换到下一个选项。' : '这一档的各项是固定的，想单独改哪一项，请选“自定义”。') + '按 F3 打开性能读数，可以看到帧率和每帧画了多少东西。<br>设置只存在这台电脑的浏览器里，不进存档。</p></div></div>';
     $('gfxset').innerHTML = h;
   }
   function onGfxClick(e) {
@@ -425,7 +434,7 @@ const UI = (() => {
         '<button class="btn big" data-act="diff">难度：' + DIFFS[S.diff || 0].n + '</button>' +
         '<button class="btn big" data-act="avatar"' + (S.party.length > 1 ? '' : ' disabled') + '>大地图形象：' + CHARS[S.party.some(m => m.id === S.avatar) ? S.avatar : 'hero'].name + '</button>' +
         '<button class="btn big" data-act="ai">AI 人物：' + AI.label() + '</button>' +
-        (G3.ok ? '<button class="btn big" data-act="gfx">画质：' + G3.gfxModes[G3.quality()] + (G3.gfxCustom() ? '（自定义）' : '') + '</button>' : '') +
+        (G3.ok ? '<button class="btn big" data-act="gfx">画质：' + G3.gfxModes[G3.quality()] + '</button>' : '') +
         '<button class="btn big" data-act="perf">性能读数：' + (G.perfOn ? '开' : '关') + '（F3）</button>' +
         '<button class="btn big ghost" data-act="title">返回标题</button>' +
         '<p class="tip">游戏会在切换地图、战斗胜利后自动保存。<br>游玩时间 ' + Math.floor(S.time / 60) + ' 分钟</p></div>';

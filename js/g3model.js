@@ -581,7 +581,7 @@
     const R = ch && ch.rig; if (!R) return;
     const T = R.T; if (NOHI || !IDX.hi || !IDX.hi[T.id] || K.R.capabilities.maxTextureSize < 4096) return;
     const now = performance.now();
-    if (on && G3.quality() === 'fast') on = false;
+    if (on && !G3.gfx.hiTex) on = false;   // 画质设置里关了“主角近景的高清贴图”
     if (on) { T.hiUse = now; if (!T.hi) loadHi(T); }
     else if (T.hi && T.hi.live && now - (T.hiUse || 0) > 90000) { if (T.hi.map) T.hi.map.dispose(); if (T.hi.normalMap) T.hi.normalMap.dispose(); T.hi.live = false; }
     const use = !!(on && T.hi && T.hi.ready);

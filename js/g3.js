@@ -14,20 +14,21 @@ const G3 = (() => {
   const POST = hdr && !/[?&]post=0/.test(QS);
 
   /* ---------- 画质设置（右上角“画质”按钮打开的面板） ----------
-     档位 gmode：auto 自动（按帧率自动降多重采样和分辨率）/ high 高清 / fast 流畅（分辨率降到七成）/ low 低配（集成显卡用）。
-     各分项（GFX_OPT）在档位的基础上还可以单独改（gover 记着改过的几项）。分项分两类：
-       live = 1 改了立刻生效；live = 0 是建场景、载模型的时候用的，要刷新页面才生效——这些一律读开局时的那一份（g3.gfxBoot）。
-     任何一档都不动四位主角的模型、贴图和材质；低配只简化景物、其他人物与后期，分辨率保持原样（只有“流畅”会降分辨率，主角也跟着变糊）。 */
-  const GFX_DEF = { msaa: 4, bloom: 1, ss: 1, cap: 0, anim: 1, shadow: 2, scene: 1, veg: 1, npcTex: 0, npcShadow: 1 };
+     档位 gmode：auto 自动（各项同高清，按帧率自动降多重采样和分辨率）/ high 高清 / low 低配（集成显卡用）/ custom 自定义。
+     前三档是固定的一套，面板上只显示、不能改；要改就选“自定义”，各分项（GFX_OPT）都能单独定，存在 gcust 里，下次选自定义还是这一套。
+     分项分两类：live = 1 改了立刻生效；live = 0 是建场景、载模型的时候用的，要刷新页面才生效——这些一律读开局时的那一份（g3.gfxBoot）。
+     自动、高清、低配都不动四位主角的模型、贴图和材质（自动降档到 85%、70% 分辨率时主角会略糊）；低配只简化景物、其他人物与后期。 */
+  const GFX_DEF = { res: 1, msaa: 4, bloom: 1, ss: 1, cap: 0, hiTex: 1, anim: 1, shadow: 2, scene: 1, veg: 1, npcTex: 0, npcShadow: 1 };
   // 低配不封帧率：封在 30 帧时，镜头跟着主角平移，画面一格一格地跳，招牌上的字、人物这些对比强的细节看着在抖、在闪（30 帧平移的通病）。
-  // 30 帧留作可选：显卡实在跟不上、或者想省电时再开
-  // 流畅：分辨率锁在七成（见 curLv），抗锯齿和超采样的默认值写在这里，面板上看到的就是实际用的，单独改也生效
-  const GFX_PRE = { auto: {}, high: {}, fast: { msaa: 0, ss: 0 }, low: { msaa: 0, bloom: 0, ss: 0, cap: 0, anim: 2, shadow: 1, scene: 0, veg: 0.5, npcTex: 1024, npcShadow: 0 } };
+  // 30 帧留作可选（自定义里）：显卡实在跟不上、或者想省电时再开
+  const GFX_PRE = { auto: {}, high: {}, low: { msaa: 0, bloom: 0, ss: 0, cap: 0, anim: 2, shadow: 1, scene: 0, veg: 0.5, npcTex: 1024, npcShadow: 0 }, custom: null };
   const GFX_OPT = [   // [键, 名称, [[值, 说明]…], 是否立刻生效]
+    ['res', '渲染分辨率', [[1, '100%'], [0.85, '85%（主角也会略糊）'], [0.7, '70%（主角也会略糊）']], 1],
     ['msaa', '多重采样抗锯齿', [[4, '4 倍'], [2, '2 倍'], [0, '关（只用后期抗锯齿）']], 1],
     ['bloom', '泛光', [[1, '开'], [0, '关']], 1],
     ['ss', '过场与标题的超采样', [[1, '开'], [0, '关']], 1],
     ['cap', '帧率上限', [[0, '不限'], [30, '30 帧（省电，镜头移动时画面会发顿、发抖）']], 1],
+    ['hiTex', '主角近景的高清贴图', [[1, '开（拉近时换上）'], [0, '关']], 1],
     ['anim', '其他人物的动作', [[1, '每帧计算'], [2, '隔一帧计算']], 1],
     ['shadow', '阴影', [[2, '精细（2048，柔边）'], [1, '普通（1024，硬边）']], 0],
     ['scene', '景物材质', [[1, '精细'], [0, '简化（不算环境反射与细部凹凸）']], 0],
@@ -35,11 +36,23 @@ const G3 = (() => {
     ['npcTex', '其他人物的贴图', [[0, '原样'], [1024, '缩小，不用法线与粗糙度贴图']], 0],
     ['npcShadow', '其他人物的投影', [[1, '实时投影'], [0, '只用脚下的圆影']], 0]
   ];
-  const GFX_MODE = { auto: '自动', high: '高清', fast: '流畅', low: '低配' };
-  let gmode = 'auto', gover = {};
-  try { const q = localStorage.getItem('yunlan_quality'); if (GFX_PRE[q]) gmode = q; const o = JSON.parse(localStorage.getItem('yunlan_gfx')); if (o && typeof o === 'object') gover = o; } catch (e) { }
-  { const m = /[?&]gfx=(\w+)/.exec(QS); if (m && GFX_PRE[m[1]]) { gmode = m[1]; gover = {}; } }   // ?gfx=low：只这一次按某一档开（不存）
-  const gfx = g3.gfx = Object.assign({}, GFX_DEF, GFX_PRE[gmode], gover), gfxBoot = g3.gfxBoot = Object.assign({}, gfx);
+  const GFX_MODE = { auto: '自动', high: '高清', low: '低配', custom: '自定义' };
+  // 只留已知分项、且取值在选项表里的（存档里的旧值、手改的坏值都丢掉）
+  const gfxClean = o => { const r = {}; if (o && typeof o === 'object') GFX_OPT.forEach(p => { if (p[0] in o && p[2].some(x => x[0] === o[p[0]])) r[p[0]] = o[p[0]]; }); return r; };
+  // 读存着的设置。q 档位、over 旧版“在档位上单独改过的几项”、cust 自定义那一套。
+  // 旧版的“流畅”和“档位 + 单独改过”都换成自定义，数值照旧（流畅 = 七成分辨率、不做多重采样和超采样、不换近景高清贴图）
+  function gfxLoad(q, over, cust) {
+    let mode = q in GFX_PRE ? q : 'auto', c = cust ? gfxClean(cust) : null;
+    if (q === 'fast') { mode = 'custom'; c = Object.assign({}, GFX_DEF, { res: 0.7, msaa: 0, ss: 0, hiTex: 0 }, gfxClean(over)); }
+    else if (!c && mode !== 'custom' && Object.keys(gfxClean(over)).length) { c = Object.assign({}, GFX_DEF, GFX_PRE[mode], gfxClean(over)); mode = 'custom'; }
+    return { mode, cust: c };
+  }
+  const gfxVals = (q, c) => Object.assign({}, GFX_DEF, q === 'custom' ? c : GFX_PRE[q]);
+  let gmode = 'auto', gcust = null;
+  try { const ls = k => localStorage.getItem(k), js = k => { try { return JSON.parse(ls(k)); } catch (e) { return null; } }; const r = gfxLoad(ls('yunlan_quality'), js('yunlan_gfx'), js('yunlan_gfx_custom')); gmode = r.mode; gcust = r.cust; } catch (e) { }
+  { const m = /[?&]gfx=(\w+)/.exec(QS); if (m && m[1] in GFX_PRE) gmode = m[1]; }   // ?gfx=low：只这一次按某一档开（不存）
+  const gfx = g3.gfx = gfxVals(gmode, gcust), gfxBoot = g3.gfxBoot = Object.assign({}, gfx);
+  g3.k_gfxLoad = gfxLoad;   // 测试用
   const LITE = !gfxBoot.scene;   // 景物用简化材质
 
   let R;
@@ -385,19 +398,20 @@ const G3 = (() => {
   const ADAPT = !/[?&](shot|test|sim)\b/.test(QS), TEST = /[?&]test\b/.test(QS);
   g3.rs = TEST ? 0.4 : 1;   // 自动测试时降低内部分辨率，加快无头软件渲染
   // 画质档位 [内部分辨率比例, 多重采样数]。帧率不够时先减多重采样（边缘仍有 FXAA 兜底），最后才降分辨率，而且最低只到 0.7，
-  // 免得人物的脸糊掉。画质设为“高清”时锁定在第一档，“流畅”锁定在最后一档
-  // 高清、低配锁在全分辨率（多重采样按设置）；流畅锁在七成分辨率（多重采样按设置，默认关）；自动按帧率在各档之间升降。多重采样都不超过设置里的上限
+  // 免得人物的脸糊掉。只有“自动”在这几档间升降；高清、低配、自定义都锁定在设置里的分辨率和多重采样
   const LV = [[1, 4], [1, 2], [1, 0], [0.85, 0], [0.7, 0]];
-  const curLv = () => { if (TEST) return [0.4, 4]; const L = gmode === 'auto' ? LV[lvl] : gmode === 'fast' ? [LV[LV.length - 1][0], 4] : LV[0]; return [L[0], Math.min(L[1], gfx.msaa)]; };
+  const lvNow = () => gmode === 'auto' ? [LV[lvl][0], Math.min(LV[lvl][1], gfx.msaa)] : [gfx.res, gfx.msaa];
+  const curLv = () => TEST ? [0.4, 4] : lvNow();
+  g3.gfxLv = lvNow;   // 测试用：不受自动测试时那个 0.4 的影响
   g3.quality = () => gmode;
-  g3.perfInfo = () => ({ mode: GFX_MODE[gmode] + (Object.keys(gover).length ? '（自定义）' : ''), lvl, scale: curLv()[0], msaa: curLv()[1], calls: R.info.render.calls, tris: R.info.render.triangles });   // 性能读数用（见 main.js）
-  const gfxSave = () => { try { localStorage.setItem('yunlan_quality', gmode); localStorage.setItem('yunlan_gfx', JSON.stringify(gover)); } catch (e) { } };
-  const gfxApply = () => { for (const k in GFX_DEF) gfx[k] = k in gover ? gover[k] : k in GFX_PRE[gmode] ? GFX_PRE[gmode][k] : GFX_DEF[k]; cnt = 0; ema = 16; probe = 0; noDrop = false; gfxSave(); };
-  // 换档：各分项回到这一档的默认
-  g3.setQuality = q => { if (!GFX_PRE[q]) return; gmode = q; gover = {}; gfxApply(); };
-  // 单独改一项；和这一档的默认相同就不算改过
-  g3.setGfx = (k, v) => { if (!(k in GFX_DEF)) return; const d = k in GFX_PRE[gmode] ? GFX_PRE[gmode][k] : GFX_DEF[k]; if (v === d) delete gover[k]; else gover[k] = v; gfxApply(); };
-  g3.gfxOpts = GFX_OPT; g3.gfxModes = GFX_MODE; g3.gfxCustom = () => Object.keys(gover).length > 0;
+  g3.perfInfo = () => ({ mode: GFX_MODE[gmode], lvl, scale: curLv()[0], msaa: curLv()[1], calls: R.info.render.calls, tris: R.info.render.triangles });   // 性能读数用（见 main.js）
+  const gfxSave = () => { try { localStorage.setItem('yunlan_quality', gmode); if (gcust) localStorage.setItem('yunlan_gfx_custom', JSON.stringify(gcust)); localStorage.removeItem('yunlan_gfx'); } catch (e) { } };
+  const gfxApply = () => { Object.assign(gfx, gfxVals(gmode, gcust)); cnt = 0; ema = 16; probe = 0; noDrop = false; gfxSave(); };
+  // 换档。第一次选“自定义”时，从当前这一档的设置开始
+  g3.setQuality = q => { if (!(q in GFX_PRE)) return; if (q === 'custom' && !gcust) gcust = gfxClean(gfx); gmode = q; gfxApply(); };
+  // 改一项：只有自定义能改
+  g3.setGfx = (k, v) => { const o = GFX_OPT.find(p => p[0] === k); if (gmode !== 'custom' || !o || !o[2].some(x => x[0] === v)) return false; gcust[k] = v; gfxApply(); return true; };
+  g3.gfxOpts = GFX_OPT; g3.gfxModes = GFX_MODE; g3.gfxCustom = () => gmode === 'custom';
   g3.gfxStale = () => GFX_OPT.filter(o => !o[3] && gfx[o[0]] !== gfxBoot[o[0]]).map(o => o[0]);   // 改了、但要刷新页面才生效的几项
   g3.qualityText = () => { const L = POST ? curLv() : [1, 4]; return GFX_MODE[gmode] + ' · ' + Math.round(g3.bw * L[0]) + '×' + Math.round(g3.bh * L[0]) + (L[1] ? ' · 抗锯齿×' + L[1] : ''); };
   const BLACK = new THREE.DataTexture(new Uint8Array([0, 0, 0, 255]), 1, 1, THREE.RGBAFormat); BLACK.needsUpdate = true;   // 关掉泛光时给合成那一步的空白泛光图

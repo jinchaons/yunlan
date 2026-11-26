@@ -93,7 +93,8 @@
     const sun = new THREE.DirectionalLight(LC(L.sun[0]), L.sun[1]);
     sun.castShadow = true; sun.shadow.mapSize.setScalar(GB0.shadow >= 2 ? 2048 : 1024);   // 画质设置里的“阴影”：精细 2048、普通 1024
     const c = sun.shadow.camera; c.left = -shadowR; c.right = shadowR; c.top = shadowR; c.bottom = -shadowR; c.near = 1; c.far = 110;
-    sun.shadow.bias = -0.0004; sun.shadow.normalBias = 0.035;
+    // 偏移量按 2048 的阴影贴图调的；贴图粗一倍，一个阴影像素在墙上占的地方也大一倍，偏移跟着放大，不然侧对太阳的墙面、招牌上会出一道道自阴影的条纹
+    const bk = 2048 / sun.shadow.mapSize.x; sun.shadow.bias = -0.0004 * bk; sun.shadow.normalBias = 0.035 * bk;
     sc.add(sun); sc.add(sun.target);
     sc.userData = { sun, dir: new THREE.Vector3(L.dir[0], L.dir[1], L.dir[2]).normalize(), lit: L, hemi };
     return sc;
@@ -101,9 +102,16 @@
   // 简化材质的天光：按环境贴图（g3.js 的 envFor）里天空的画法估出来——朝上的面看到的天，余弦加权下天顶约占八成、地平线两成；
   // 朝下的面看到的地面约占八成半，其余是地平线
   const hemiOf = s => { const top = LC(s[0], s[1]), hor = LC(s[2], s[3]), gnd = LC(s[4], s[5]); return [hor.clone().lerp(top, 0.78), hor.clone().lerp(gnd, 0.85)]; };
+  /* 阴影的范围跟着镜头走，但每次只按“整格阴影像素”挪：在太阳看过来的平面上，把中心对齐到阴影像素的整数倍。
+     不然每挪一下，墙上、招牌上的影子边缘和细小的自阴影就重新排一遍，主角一走动，旁边的房子就一闪一闪的 */
+  const _sx = new THREE.Vector3(), _sy = new THREE.Vector3(), _sp = new THREE.Vector3();
   function aimSun(sc, x, z) {
-    const u = sc.userData; x = Math.round(x * 2) / 2; z = Math.round(z * 2) / 2;
-    u.sun.target.position.set(x, 0, z); u.sun.position.set(x + u.dir.x * 50, u.dir.y * 50, z + u.dir.z * 50); u.sun.target.updateMatrixWorld();
+    const u = sc.userData, d = u.dir, sh = u.sun.shadow, c = sh.camera, t = (c.right - c.left) / sh.mapSize.x;
+    _sx.set(d.z, 0, -d.x).normalize(); _sy.crossVectors(d, _sx);   // 阴影相机的横轴、竖轴（与 three.js 的 lookAt 一致：上方向取世界的 y）
+    _sp.set(x, 0, z);
+    const a = Math.round(_sp.dot(_sx) / t) * t, b = Math.round(_sp.dot(_sy) / t) * t, k = Math.round(_sp.dot(d) * 4) / 4;
+    _sp.copy(_sx).multiplyScalar(a).addScaledVector(_sy, b).addScaledVector(d, k);
+    u.sun.target.position.copy(_sp); u.sun.position.copy(_sp).addScaledVector(d, 50); u.sun.target.updateMatrixWorld();
   }
   // 阴影贴图覆盖的范围（半边长）：范围越小，同一张贴图落在人物身上的像素越多，影子越清晰
   function shadowSpan(sc, r) { const u = sc.userData; if (u.sr === r) return; u.sr = r; const c = u.sun.shadow.camera; c.left = -r; c.right = r; c.top = r; c.bottom = -r; c.updateProjectionMatrix(); }
@@ -1795,7 +1803,7 @@
       shadowSpan(sc, Math.round(15 * zo * 4) / 4);   // 阴影只算镜头看得到的那一片再多出几格（原先是 19，城里每帧有近一半的三角面花在画面外的阴影上） sc.fog.near = 30 * zo; sc.fog.far = 85 * zo;
       cam.fov = 30; cam.aspect = asp; cam.updateProjectionMatrix();
       cam.position.set(world.cx, dist * Math.sin(pitch) + 0.6 * zk, world.cz + dist * Math.cos(pitch)); cam.lookAt(world.cx, lerp(0.6, 1.0, zk), world.cz); cam.updateMatrixWorld();
-      aimSun(sc, world.cx, world.cz - 2 * zo);
+      aimSun(sc, world.cx + (world.sunOff || 0), world.cz - 2 * zo);   // sunOff：开发检视用（?test 里挪动阴影范围、量画面闪不闪），平时是 0
       _p.set(px, 0.7, pz).project(cam);
       U.uP.value.set(px, 0, pz); const rs = G3.post ? G3.rs : 1; U.uPS.value.set((_p.x * 0.5 + 0.5) * G3.bw * rs, (_p.y * 0.5 + 0.5) * G3.bh * rs, 0.08 * G3.bh * rs / zm);
     }

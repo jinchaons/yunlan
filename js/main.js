@@ -244,7 +244,7 @@ cv.addEventListener('pointerdown', e => {
   else if (G.scene === 'world' && !UI.busyUI()) World.click(lx, ly);
 });
 cv.addEventListener('pointermove', e => { if (G.scene === 'battle') Battle.hover(e.clientX / G.scale, e.clientY / G.scale); });
-// 大地图：滚轮或 +/- 键缩放视野。往后滚拉远（看得更宽，最远是默认视野的两倍），往前滚拉近（看清人物）；
+// 大地图：滚轮或 +/- 键缩放视野。往后滚拉远（看得更宽，最远到默认视野的一倍半，即“较远”档），往前滚拉近（最近到“最近”档：刚好装下主角全身）；
 // 滚过默认视野时先停在默认上，方便找回原来的镜头
 function zoomBy(k) {
   if (!G3.ok || G.scene !== 'world') return;

@@ -1483,19 +1483,25 @@
 
   /* ================= 大地图 ================= */
   const world = G3.world = { sc: null, m: null, npc: new Map(), foe: new Map(), walk: new Map(), hero: null, cx: 0, cz: 0, fxo: null, exits: [], dyn: null, ring: null, zoom: 1, zoomT: 1, vw: 13, vn: 11, vs: 7.5 };
-  const ZMAX = 2;   // 滚轮缩放的范围：0.36（贴近人物）～ 1（默认）～ 2（拉远，看到的范围宽一倍）
-  try { const z = +localStorage.getItem('yunlan_zoom'); if (z >= 0.36 && z <= ZMAX) world.zoom = world.zoomT = z; } catch (e) { }
-  world.zmax = ZMAX;
+  // 滚轮缩放的范围：ZMIN（最近：镜头贴近，刚好装下主角全身）～ 1（默认）～ ZMAX（较远，看到的范围宽一半）。
+  // ZNEAR：原先的最近（对准腰部，全身约占画面一半多）；比它还近的那一段镜头另算（见 world.render 的 zc）
+  const ZMAX = 1.5, ZMIN = +((/[?&]zmin=([\d.]+)/.exec(location.search) || [])[1] || 0.22), ZNEAR = 0.36;   // &zmin=：开发调最近档用
+  try { const z = +localStorage.getItem('yunlan_zoom'); if (z > 0) world.zoom = world.zoomT = clamp(z, ZMIN, ZMAX); } catch (e) { }   // 以前存的 2（原先的最远）收到 1.5
+  world.zmax = ZMAX; world.zmin = ZMIN;
+  // 最近档的俯角（弧度，约 24°）和镜头对准的高度（截图调出来的：发髻到脚下的光圈都在画面里，上下各留一点空）；&zpitch= &zlook=：开发调镜头用
+  const qn = (k, v) => +((new RegExp('[?&]' + k + '=([\\d.]+)').exec(location.search) || [])[1] || v);
+  const ZPITCH = qn('zpitch', 0.42), ZLOOK = qn('zlook', 0.68);
   // 测试用：这张图的景物影子大图（没开就是 null）
   world.bakeInfo = () => { const B = world.sc && world.sc.userData.bake; return B ? { w: B.w, h: B.h, ts: B.ts, t0: B.t0, sun: world.sc.userData.sun, quad: B.quad, map: B.bk.shadow.map } : null; };
-  // 界面上“视野”按钮的五档：默认、默认与最远的正中、最远、默认与最近的正中、最近。不在档位上（用滚轮调过）时先回到默认
-  const ZSTEPS = [[1, '默认'], [(1 + ZMAX) / 2, '较远'], [ZMAX, '最远'], [(1 + 0.36) / 2, '较近'], [0.36, '最近']];
+  // 界面上“视野”按钮的四档：默认、较远、较近、最近。不在档位上（用滚轮调过）时先回到默认
+  const ZSTEPS = [[1, '默认'], [ZMAX, '较远'], [0.68, '较近'], [ZMIN, '最近']];
+  world.zsteps = ZSTEPS;
   world.stepZoom = () => {
     const i = ZSTEPS.findIndex(s => Math.abs(s[0] - world.zoomT) < 0.005), s = ZSTEPS[i < 0 ? 0 : (i + 1) % ZSTEPS.length];
     world.setZoom(s[0]);
     return s[1] + (s[0] > (world.zcap || ZMAX) + 0.005 ? '（屋里最远只到看全整间屋子）' : '');
   };
-  world.setZoom = z => { world.zoomT = clamp(z, 0.36, ZMAX); try { localStorage.setItem('yunlan_zoom', world.zoomT); } catch (e) { } };
+  world.setZoom = z => { world.zoomT = clamp(z, ZMIN, ZMAX); try { localStorage.setItem('yunlan_zoom', world.zoomT); } catch (e) { } };
   function killEnt(e) {
     if (e.ch) K.kill(e.ch);
     if (e.g) { if (e.g.parent) e.g.parent.remove(e.g); e.g.traverse(o => { if (o.isMesh && !o.geometry._keep) o.geometry.dispose(); if ((o.isSprite || o.isMesh) && o.material && !o.material._keep) o.material.dispose(); }); }
@@ -1862,13 +1868,16 @@
       a.h = ch.h; a.glb = !!ch.glb; if (ch.rim) ch.rim.value = 0.7;   // 平视镜头里给人物一圈轮廓光，从背景里分出来
     }
     // 镜头
-    // 滚轮缩放（zoom 从 0.36 到 ZMAX，默认 1）：拉近时镜头压低、对准主角上半身，方便看清人物；
-    // 拉远时镜头升高、再俯一些，看到的范围成倍变大（雾、阴影、人物的显示范围都跟着放大）
+    // 滚轮缩放（zoom 从 ZMIN 到 ZMAX，默认 1）：拉近时镜头压低、对准主角，方便看清人物；
+    // 拉远时镜头升高、再俯一些，看到的范围变大（阴影、人物的显示范围都跟着放大）。
+    // 比原先的最近（ZNEAR）还近的那一段（zc 从 0 到 1）：镜头再压低一点、对准身体正中，到 ZMIN 时主角全身刚好装满画面的高度。
+    // 俯角不能再低：画面上沿的视线贴近水平时，下面“镜头看得到哪一片”的算法（pitch - 15°）就失效了
     world.zoom += (world.zoomT - world.zoom) * (1 - Math.exp(-dt * 8));
     // 屋里地方小：最多拉远到刚好看全整间屋子，不然屋子缩在一片黑里
     const asp = G3.aspect, d0 = Math.max(16, 3.5 / (0.268 * asp)), cap = world.zcap = m.d.indoor ? clamp(Math.max((m.w / 2 + 2) / (d0 * 0.268 * asp), (m.h + 4.5) / (d0 * 0.755)), 1, ZMAX) : ZMAX;
-    const zm = Math.min(world.zoom, cap), zk = clamp((1 - zm) / 0.64, 0, 1), zo = Math.max(1, zm), zf = clamp((zm - 1) / (ZMAX - 1), 0, 1);
-    const dist = d0 * zm, pitch = zm > 1 ? lerp(0.85, 1.0, zf) : lerp(0.85, 0.5, zk), halfW = dist * 0.268 * asp, hwv = halfW - Math.min(halfW * 0.2, 1.55);
+    // zf：拉远那一段的进度，仍按原先的 1 ～ 2 算（上限收到 1.5 以后，较远档的镜头角度和原来一样）
+    const zm = Math.min(world.zoom, cap), zk = clamp((1 - zm) / (1 - ZNEAR), 0, 1), zc = clamp((ZNEAR - zm) / (ZNEAR - ZMIN), 0, 1), zo = Math.max(1, zm), zf = clamp(zm - 1, 0, 1);
+    const dist = d0 * zm, pitch = zm > 1 ? lerp(0.85, 1.0, zf) : lerp(lerp(0.85, 0.5, zk), ZPITCH, zc), halfW = dist * 0.268 * asp, hwv = halfW - Math.min(halfW * 0.2, 1.55);
     // 镜头在地面上往北能看出去 nExt 格、往南 sExt 格；拉远以后按这个来定镜头离地图边缘多远，边外始终只露出两三格
     const nExt = dist * (Math.sin(pitch) / Math.tan(pitch - 0.2618) - Math.cos(pitch)), sExt = dist * (Math.cos(pitch) - Math.sin(pitch) / Math.tan(pitch + 0.2618));
     const zN = zm > 1 ? nExt - 2.85 : 4.6 * zm, zS = zm > 1 ? sExt - 1.4 : 3.2 * zm;
@@ -1885,10 +1894,10 @@
     } else {
       shadowSpan(sc, Math.round(15 * zo * 4) / 4);   // 阴影只算镜头看得到的那一片再多出几格（原先是 19，城里每帧有近一半的三角面花在画面外的阴影上） sc.fog.near = 30 * zo; sc.fog.far = 85 * zo;
       cam.fov = 30; cam.aspect = asp; cam.updateProjectionMatrix();
-      cam.position.set(world.cx, dist * Math.sin(pitch) + 0.6 * zk, world.cz + dist * Math.cos(pitch)); cam.lookAt(world.cx, lerp(0.6, 1.0, zk), world.cz); cam.updateMatrixWorld();
+      cam.position.set(world.cx, dist * Math.sin(pitch) + 0.6 * zk, world.cz + dist * Math.cos(pitch)); cam.lookAt(world.cx, lerp(lerp(0.6, 1.0, zk), ZLOOK, zc), world.cz); cam.updateMatrixWorld();
       aimSun(sc, world.cx + (world.sunOff || 0), world.cz - 2 * zo);   // sunOff：开发检视用（?test 里挪动阴影范围、量画面闪不闪），平时是 0
       _p.set(px, 0.7, pz).project(cam);
-      U.uP.value.set(px, 0, pz); const rs = G3.post ? G3.rs : 1; U.uPS.value.set((_p.x * 0.5 + 0.5) * G3.bw * rs, (_p.y * 0.5 + 0.5) * G3.bh * rs, 0.08 * G3.bh * rs / zm);
+      U.uP.value.set(px, 0, pz); const rs = G3.post ? G3.rs : 1; U.uPS.value.set((_p.x * 0.5 + 0.5) * G3.bw * rs, (_p.y * 0.5 + 0.5) * G3.bh * rs, 0.08 * G3.bh * rs / Math.max(zm, ZNEAR));   // 主角身前的景物变透明的那一圈：拉得比原先的最近还近时不再放大，不然前景大片发虚
     }
     // 动态光效
     fxAnim(world.fxo, t);

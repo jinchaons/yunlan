@@ -14,7 +14,7 @@ const UI = (() => {
     $('ui').innerHTML = `
 <div id="hud" class="hide">
   <div id="h-party"></div>
-  <div id="h-top"><span id="h-area"></span><span id="h-gold"></span><button id="h-menu" class="btn sm">菜单</button><button id="h-zoom" class="btn sm" title="切换视野：默认 → 较远 → 最远 → 较近 → 最近">视野</button><button id="h-q" class="btn sm">画质</button><button id="h-snd" class="btn sm ico">♪</button></div>
+  <div id="h-top"><span id="h-area"></span><span id="h-gold"></span><button id="h-menu" class="btn sm">菜单</button><button id="h-zoom" class="btn sm" title="切换视野：默认 → 较远 → 较近 → 最近">视野</button><button id="h-q" class="btn sm">画质</button><button id="h-snd" class="btn sm ico">♪</button></div>
   <div id="h-quest"></div>
   <div id="h-hint">方向键 / WASD 移动 · 空格 交谈 · 点击地面自动寻路 · 滚轮 缩放视野 · M 地图 · Esc 菜单</div>
 </div>
@@ -53,7 +53,7 @@ const UI = (() => {
     $('h-snd').addEventListener('click', () => { const on = Sfx.toggle(); $('h-snd').classList.toggle('off', !on); });
     // 画质：打开画质设置面板（档位 + 各分项）
     if (!G3.ok) { $('h-q').classList.add('hide'); $('h-zoom').classList.add('hide'); $('t-gfx').classList.add('hide'); }
-    // “视野”按钮：五档视野轮流切换（默认 → 较远 → 最远 → 较近 → 最近）；用滚轮调到了别的位置时，先回到默认
+    // “视野”按钮：四档视野轮流切换（默认 → 较远 → 较近 → 最近）；用滚轮调到了别的位置时，先回到默认
     $('h-zoom').addEventListener('click', () => { if (G.scene !== 'world' || !G3.ok) return; Sfx.play('ui'); toast('视野：' + G3.world.stepZoom()); });
     $('h-q').addEventListener('click', () => { if (G.busy && !menu.open) return; Sfx.play('ui'); gfxPanel(true); });
     $('t-gfx').addEventListener('click', () => { Sfx.play('ui'); gfxPanel(true); });
